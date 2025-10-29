@@ -3,13 +3,14 @@ from supabase import create_client, Client
 import pandas as pd
 import re
 import requests
+from auth import show_login, logout_button  # 👈 auth.py we built earlier
 
 # -------------------------------
 # INITIAL SETUP
 # -------------------------------
 st.set_page_config(page_title="Credify", layout="wide")
 
-# Remove top white space / default Streamlit header
+# Remove Streamlit header / padding
 st.markdown("""
 <style>
 [data-testid="stHeader"] {display:none !important;}
@@ -33,7 +34,18 @@ YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------------
-# GLOBAL STYLES (DARK / LIGHT)
+# AUTHENTICATION GATE
+# -------------------------------
+if "user" not in st.session_state:
+    show_login()
+    st.stop()
+
+user_email = st.session_state["user"].email
+logout_button()
+st.sidebar.success(f"Logged in as {user_email}")
+
+# -------------------------------
+# THEME SETTINGS
 # -------------------------------
 def set_app_theme(mode):
     if mode == "Dark":
@@ -48,11 +60,6 @@ def set_app_theme(mode):
             .stSelectbox>div>div>select{
                 background-color:#1C1F24 !important;color:#F2F4F8 !important;
                 border:1px solid #333 !important;
-            }
-            .stTextInput>div>div>input:focus,
-            .stTextArea>div>div>textarea:focus{
-                border-color:#1DB954 !important;
-                box-shadow:0 0 0 1px #1DB954 !important;
             }
             .project-card{
                 background-color:#181C20;border-radius:10px;padding:10px;margin-bottom:16px;
@@ -86,18 +93,17 @@ def extract_video_id(url):
     match = re.search(pattern, url)
     return match.group(1) if match else None
 
+
 def fetch_youtube_data(video_id):
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={YOUTUBE_API_KEY}"
     res = requests.get(url)
     data = res.json()
-
     if "items" not in data or not data["items"]:
         return None
 
     item = data["items"][0]
     snippet = item["snippet"]
     stats = item.get("statistics", {})
-
     return {
         "p_id": video_id,
         "p_title": snippet.get("title"),
@@ -112,24 +118,21 @@ def fetch_youtube_data(video_id):
     }
 
 # -------------------------------
-# PAGE 1: DASHBOARD
+# PAGE 1 — DASHBOARD
 # -------------------------------
 def show_dashboard():
     st.title("🌟 Creator Dashboard")
 
-    email = st.text_input("Enter your email to load your dashboard:")
-    if not email:
-        st.info("👆 Enter your email above to view your personalized dashboard.")
-        return
-
-    user_res = supabase.table("users").select("*").eq("u_email", email).execute()
+    # Get user info
+    user_res = supabase.table("users").select("*").eq("u_email", user_email).execute()
     if not user_res.data:
-        st.error("❌ No user found with this email.")
+        st.info("No profile found yet — one will be created after your first claim.")
         return
 
     user = user_res.data[0]
     u_id = user["u_id"]
 
+    # Fetch metrics
     metrics_res = supabase.table("user_metrics").select("*").eq("u_id", u_id).execute()
     metrics = metrics_res.data[0] if metrics_res.data else {
         "total_view_count": 0, "total_like_count": 0,
@@ -166,12 +169,13 @@ def show_dashboard():
     projects_response = supabase.table("user_projects") \
         .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
         .eq("u_id", u_id).execute()
-    data = projects_response.data
 
+    data = projects_response.data
     if not data:
         st.info("You haven’t been credited on any projects yet.")
         return
 
+    # Aggregate roles
     unique_projects = {}
     for rec in data:
         pid = rec["projects"]["p_id"]
@@ -181,6 +185,7 @@ def show_dashboard():
         else:
             unique_projects[pid]["roles"].append(role)
 
+    # Sort by views
     sorted_projects = []
     for pid, rec in unique_projects.items():
         metric_res = supabase.table("latest_metrics").select("view_count").eq("p_id", pid).execute()
@@ -189,6 +194,7 @@ def show_dashboard():
         sorted_projects.append(rec)
     sorted_projects = sorted(sorted_projects, key=lambda x: x["views"], reverse=True)
 
+    # Display
     cols = st.columns(3)
     for i, rec in enumerate(sorted_projects):
         proj = rec["project"]
@@ -204,20 +210,16 @@ def show_dashboard():
             st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
-# PAGE 2: CLAIM CREDITS  ✅ (Copied + integrated from working claim_role.py)
+# PAGE 2 — CLAIM CREDITS
 # -------------------------------
 def show_claim_page():
     st.title("🎬 Claim Your Role on a Project via YouTube URL")
 
-    # --- Helper UI ---
     url_input = st.text_input("Paste a YouTube URL")
     name = st.text_input("Full name")
-    email = st.text_input("Email")
     bio = st.text_area("Short bio (optional)")
 
-    st.markdown("### 🎭 Select your roles")
-
-    # Fetch roles from Supabase
+    # Roles
     roles_response = supabase.table("roles").select("role_name, category").execute()
     categories = {}
     if roles_response.data:
@@ -248,84 +250,84 @@ def show_claim_page():
         st.info("No roles added yet. Add at least one before claiming.")
 
     if st.button("Claim Role"):
-        if not url_input or not email or not name:
+        if not url_input or not name:
             st.error("Please fill in all required fields.")
+            st.stop()
         elif not st.session_state.selected_roles:
             st.error("Please add at least one role.")
+            st.stop()
+
+        video_id = extract_video_id(url_input)
+        if not video_id:
+            st.error("❌ Invalid YouTube URL.")
+            st.stop()
+
+        # Check if project exists
+        existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
+        if existing:
+            project = existing[0]
+            st.info(f"📽 Project already exists: {project['p_title']}")
         else:
-            video_id = extract_video_id(url_input)
-            if not video_id:
-                st.error("❌ Invalid YouTube URL.")
+            video_data = fetch_youtube_data(video_id)
+            if not video_data:
+                st.error("❌ Could not fetch video info from YouTube API.")
                 st.stop()
 
-            # Check if project exists
-            existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
-            if existing:
-                project = existing[0]
-                st.info(f"📽 Project already exists: {project['p_title']}")
-            else:
-                # Fetch from YouTube and insert
-                video_data = fetch_youtube_data(video_id)
-                if not video_data:
-                    st.error("❌ Could not fetch video info from YouTube API.")
-                    st.stop()
+            supabase.table("projects").insert({
+                "p_id": video_data["p_id"],
+                "p_title": video_data["p_title"],
+                "p_description": video_data["p_description"],
+                "p_link": video_data["p_link"],
+                "p_platform": "youtube",
+                "p_channel": video_data["p_channel"],
+                "p_posted_at": video_data["p_posted_at"],
+                "p_thumbnail_url": video_data["p_thumbnail_url"]
+            }).execute()
 
-                supabase.table("projects").insert({
-                    "p_id": video_data["p_id"],
-                    "p_title": video_data["p_title"],
-                    "p_description": video_data["p_description"],
-                    "p_link": video_data["p_link"],
-                    "p_platform": "youtube",
-                    "p_channel": video_data["p_channel"],
-                    "p_posted_at": video_data["p_posted_at"],
-                    "p_thumbnail_url": video_data["p_thumbnail_url"]
-                }).execute()
+            supabase.table("metrics").insert({
+                "p_id": video_data["p_id"],
+                "view_count": video_data["view_count"],
+                "like_count": video_data["like_count"],
+                "comment_count": video_data["comment_count"]
+            }).execute()
 
-                supabase.table("metrics").insert({
-                    "p_id": video_data["p_id"],
-                    "view_count": video_data["view_count"],
-                    "like_count": video_data["like_count"],
-                    "comment_count": video_data["comment_count"]
-                }).execute()
+            st.success(f"✅ Added new project: {video_data['p_title']}")
 
-                st.success(f"✅ Added new project: {video_data['p_title']}")
+        # Ensure user exists / update
+        supabase.table("users").upsert({
+            "u_email": user_email,
+            "u_name": name,
+            "u_bio": bio
+        }, on_conflict=["u_email"]).execute()
 
-            # Ensure user exists
-            user = supabase.table("users").upsert({
-                "u_email": email,
-                "u_name": name,
-                "u_bio": bio
-            }, on_conflict=["u_email"]).execute()
+        user_record = supabase.table("users").select("u_id").eq("u_email", user_email).execute()
+        u_id = user_record.data[0]["u_id"]
 
-            user_record = supabase.table("users").select("u_id").eq("u_email", email).execute()
-            u_id = user_record.data[0]["u_id"]
+        for role_entry in st.session_state.selected_roles:
+            _, role_name = role_entry.split(" - ")
+            supabase.table("user_projects").insert({
+                "u_id": u_id,
+                "p_id": video_id,
+                "u_role": role_name
+            }).execute()
 
-            # Add all roles
-            for role_entry in st.session_state.selected_roles:
-                category, role_name = role_entry.split(" - ")
-                supabase.table("user_projects").insert({
-                    "u_id": u_id,
-                    "p_id": video_id,
-                    "u_role": role_name
-                }).execute()
-
-            st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
-            st.balloons()
-            st.session_state.selected_roles = []
+        st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
+        st.balloons()
+        st.session_state.selected_roles = []
 
 # -------------------------------
-# PAGE 3: EXPLORE
+# PAGE 3 — EXPLORE
 # -------------------------------
 def show_explore_page():
     st.title("🔍 Explore Public Projects")
-    st.info("This section will display trending creators and top-viewed projects soon.")
+    st.info("This section will display trending creators soon.")
 
 # -------------------------------
-# PAGE 4: SETTINGS
+# PAGE 4 — SETTINGS
 # -------------------------------
 def show_settings_page():
     st.title("⚙️ Settings")
-    st.info("Settings and customization options will go here.")
+    st.info("Profile editing and preferences coming soon.")
 
 # -------------------------------
 # SIDEBAR NAVIGATION

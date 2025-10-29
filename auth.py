@@ -1,22 +1,70 @@
 import streamlit as st
 from supabase import create_client, Client
+from urllib.parse import urlparse, parse_qs
 
-# Initialize Supabase
-SUPABASE_URL = st.secrets["supabase"]["SUPABASE_URL"]
-SUPABASE_ANON_KEY = st.secrets["supabase"]["SUPABASE_ANON_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+# -------------------------------
+# SUPABASE CONNECTION
+# -------------------------------
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# -------------------------------
+# USER SYNC HELPER
+# -------------------------------
+def ensure_user_in_db(user):
+    """Ensures a Supabase Auth user has a matching record in the users table."""
+    try:
+        user_email = user.email
+        user_name = user.email.split("@")[0]
+
+        existing = supabase.table("users").select("*").eq("u_email", user_email).execute()
+        if not existing.data:
+            supabase.table("users").insert({
+                "u_email": user_email,
+                "u_name": user_name,
+                "u_bio": ""
+            }).execute()
+    except Exception as e:
+        st.warning(f"⚠️ Could not sync user to database: {e}")
+
+
+# -------------------------------
+# LOGIN PAGE
+# -------------------------------
 def show_login():
     st.title("🔐 Credify Login")
 
-    # Google Login
+    # --- Handle OAuth redirect ---
+    query_params = st.query_params
+    if "code" in query_params:
+        code = query_params["code"]
+        try:
+            # ✅ FIX: Supabase v2.22+ expects a dict, not a string
+            res = supabase.auth.exchange_code_for_session({"auth_code": code})
+            if res and hasattr(res, "user") and res.user:
+                st.session_state["user"] = res.user
+                ensure_user_in_db(res.user)
+                st.success(f"✅ Logged in as {res.user.email}")
+                st.rerun()
+            else:
+                st.error("❌ Failed to exchange session code.")
+        except Exception as e:
+            st.error(f"Error during OAuth session exchange: {e}")
+        return
+
+    # --- Google Sign-In Button ---
     if st.button("Continue with Google"):
-        res = supabase.auth.sign_in_with_oauth({"provider": "google"})
-        st.markdown(f"[Click here to complete sign-in →]({res.url})")
+        try:
+            res = supabase.auth.sign_in_with_oauth({"provider": "google"})
+            st.markdown(f"[Click here to continue →]({res.url})")
+        except Exception as e:
+            st.error(f"Google Sign-in failed: {e}")
 
     st.markdown("---")
     st.subheader("Or use Email / Password")
 
+    # ---- Email/Password ----
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
 
@@ -27,22 +75,36 @@ def show_login():
                 user = supabase.auth.sign_in_with_password(
                     {"email": email, "password": password}
                 )
-                st.session_state["user"] = user.user
-                st.success(f"Welcome, {user.user.email}!")
-                st.rerun()
+                if user and user.user:
+                    st.session_state["user"] = user.user
+                    ensure_user_in_db(user.user)
+                    st.success(f"Welcome, {user.user.email}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials.")
             except Exception as e:
                 st.error(f"Login failed: {e}")
+
     with col2:
         if st.button("Sign Up"):
             try:
-                supabase.auth.sign_up({"email": email, "password": password})
-                st.success("Account created! Check your email to confirm.")
+                user = supabase.auth.sign_up(
+                    {"email": email, "password": password}
+                )
+                st.success("✅ Account created! Check your email to verify.")
             except Exception as e:
                 st.error(f"Sign-up failed: {e}")
 
+
+# -------------------------------
+# LOGOUT BUTTON
+# -------------------------------
 def logout_button():
-    """Logout and clear session."""
+    """Clears user session and logs out."""
     if st.button("Logout"):
-        supabase.auth.sign_out()
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            pass
         st.session_state.clear()
         st.rerun()
