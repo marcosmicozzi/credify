@@ -9,6 +9,24 @@ import requests
 # -------------------------------
 st.set_page_config(page_title="Credify", layout="wide")
 
+# Remove top white space / default Streamlit header
+st.markdown("""
+<style>
+[data-testid="stHeader"] {display:none !important;}
+.block-container {padding-top:0rem !important;}
+.stSidebar > div:first-child {padding-top:0.5rem !important;}
+[data-testid="collapsedControl"] {
+  display:block !important; visibility:visible !important;
+  color:#1DB954 !important; opacity:0.9 !important; z-index:9999 !important;
+  transition:opacity .2s ease-in-out;
+}
+[data-testid="collapsedControl"]:hover {opacity:1 !important; transform:scale(1.1);}
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------------
+# SUPABASE CLIENT
+# -------------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
 YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
@@ -21,71 +39,52 @@ def set_app_theme(mode):
     if mode == "Dark":
         st.markdown("""
             <style>
-            body, .stApp {
-                background-color: #0B0C10 !important;
-                color: #F2F4F8 !important;
-            }
-            .stSidebar {
-                background-color: #111418 !important;
-                color: #E8E8E8 !important;
-            }
-            h1, h2, h3, h4, h5, h6, p, span, div {
-                color: #F2F4F8 !important;
-            }
-            a { 
-                color: #1DB954 !important; 
-                text-decoration: none; 
-            }
+            body,.stApp{background-color:#0B0C10 !important;color:#F2F4F8 !important;}
+            .stSidebar{background-color:#111418 !important;color:#E8E8E8 !important;}
+            h1,h2,h3,h4,h5,h6,p,span,div{color:#F2F4F8 !important;}
+            a{color:#1DB954 !important;text-decoration:none;}
             .stTextInput>div>div>input,
             .stTextArea>div>div>textarea,
-            .stSelectbox>div>div>select {
-                background-color: #1C1F24 !important;
-                color: #F2F4F8 !important;
-                border: 1px solid #333 !important;
+            .stSelectbox>div>div>select{
+                background-color:#1C1F24 !important;color:#F2F4F8 !important;
+                border:1px solid #333 !important;
             }
             .stTextInput>div>div>input:focus,
-            .stTextArea>div>div>textarea:focus {
-                border-color: #1DB954 !important;
-                box-shadow: 0 0 0 1px #1DB954 !important;
+            .stTextArea>div>div>textarea:focus{
+                border-color:#1DB954 !important;
+                box-shadow:0 0 0 1px #1DB954 !important;
             }
-            .project-card {
-                background-color: #181C20;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 16px;
-                box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+            .project-card{
+                background-color:#181C20;border-radius:10px;padding:10px;margin-bottom:16px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.5);
+                transition:transform .2s ease, box-shadow .2s ease;
             }
-            .project-card:hover {
-                transform: translateY(-3px);
-                box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+            .project-card:hover{
+                transform:translateY(-3px);
+                box-shadow:0 4px 16px rgba(0,0,0,0.6);
             }
             </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
             <style>
-            body, .stApp { background-color: #FFFFFF !important; color: #222 !important; }
-            .stSidebar { background-color: #F8F8F8 !important; }
-            a { color: #0B5FFF !important; text-decoration: none; }
-            .project-card {
-                background-color: #F9F9F9;
-                border-radius: 10px;
-                padding: 10px;
-                margin-bottom: 16px;
-                box-shadow: 0 1px 5px rgba(0,0,0,0.1);
+            body,.stApp{background-color:#FFFFFF !important;color:#222 !important;}
+            .stSidebar{background-color:#F8F8F8 !important;}
+            a{color:#0B5FFF !important;text-decoration:none;}
+            .project-card{
+                background-color:#F9F9F9;border-radius:10px;padding:10px;
+                margin-bottom:16px;box-shadow:0 1px 5px rgba(0,0,0,0.1);
             }
             </style>
         """, unsafe_allow_html=True)
-
 
 # -------------------------------
 # HELPERS
 # -------------------------------
 def extract_video_id(url):
-    pattern = r"(?:v=|youtu\.be/|embed/)([a-zA-Z0-9_-]{11})"
+    pattern = r"(?:v=|youtu\\.be/|embed/)([a-zA-Z0-9_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
-
 
 def fetch_youtube_data(video_id):
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={YOUTUBE_API_KEY}"
@@ -146,7 +145,8 @@ def show_dashboard():
     with col2:
         st.subheader(user["u_name"])
         st.write(user["u_email"])
-        if user.get("u_bio"): st.caption(user["u_bio"])
+        if user.get("u_bio"):
+            st.caption(user["u_bio"])
 
     st.divider()
 
@@ -163,7 +163,6 @@ def show_dashboard():
 
     # Projects
     st.markdown("### 🎬 Your Projects")
-
     projects_response = supabase.table("user_projects") \
         .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
         .eq("u_id", u_id).execute()
@@ -173,7 +172,6 @@ def show_dashboard():
         st.info("You haven’t been credited on any projects yet.")
         return
 
-    # Avoid duplicate projects
     unique_projects = {}
     for rec in data:
         pid = rec["projects"]["p_id"]
@@ -183,7 +181,6 @@ def show_dashboard():
         else:
             unique_projects[pid]["roles"].append(role)
 
-    # Sort by views
     sorted_projects = []
     for pid, rec in unique_projects.items():
         metric_res = supabase.table("latest_metrics").select("view_count").eq("p_id", pid).execute()
@@ -207,63 +204,114 @@ def show_dashboard():
             st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
-# PAGE 2: CLAIM CREDITS
+# PAGE 2: CLAIM CREDITS  ✅ (Copied + integrated from working claim_role.py)
 # -------------------------------
 def show_claim_page():
-    st.title("🎬 Claim Your Role on a Project")
+    st.title("🎬 Claim Your Role on a Project via YouTube URL")
 
+    # --- Helper UI ---
     url_input = st.text_input("Paste a YouTube URL")
     name = st.text_input("Full name")
     email = st.text_input("Email")
     bio = st.text_area("Short bio (optional)")
 
-    # Fetch dynamic roles
-    roles_data = supabase.table("roles").select("role_name, category").execute().data
-    categories = sorted(list(set(r["category"] for r in roles_data)))
-    cat = st.selectbox("Select category", categories)
-    available_roles = [r["role_name"] for r in roles_data if r["category"] == cat]
+    st.markdown("### 🎭 Select your roles")
 
-    roles_selected = []
-    role = st.selectbox("Select role", available_roles)
+    # Fetch roles from Supabase
+    roles_response = supabase.table("roles").select("role_name, category").execute()
+    categories = {}
+    if roles_response.data:
+        for r in roles_response.data:
+            cat = r["category"] if r["category"] else "Misc"
+            categories.setdefault(cat, []).append(r["role_name"])
+    else:
+        categories = {"Misc": ["Other"]}
+
+    if "selected_roles" not in st.session_state:
+        st.session_state.selected_roles = []
+
+    category = st.selectbox("Select category", list(categories.keys()), key="category_select")
+    role = st.selectbox("Select role", categories[category], key="role_select")
+
     if st.button("➕ Add Role"):
-        roles_selected.append(role)
+        role_entry = f"{category} - {role}"
+        if role_entry not in st.session_state.selected_roles:
+            st.session_state.selected_roles.append(role_entry)
+        else:
+            st.warning("You’ve already added this role.")
+
+    if st.session_state.selected_roles:
+        st.markdown("**Added roles:**")
+        for r in st.session_state.selected_roles:
+            st.write(f"• {r}")
+    else:
+        st.info("No roles added yet. Add at least one before claiming.")
 
     if st.button("Claim Role"):
-        video_id = extract_video_id(url_input)
-        if not video_id:
-            st.error("❌ Invalid YouTube URL.")
-            return
-
-        # Check or create project
-        existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
-        if not existing:
-            video_data = fetch_youtube_data(video_id)
-            if not video_data:
-                st.error("❌ Could not fetch video data.")
-                return
-            supabase.table("projects").insert(video_data).execute()
-            supabase.table("metrics").insert({
-                "p_id": video_id,
-                "view_count": video_data["view_count"],
-                "like_count": video_data["like_count"],
-                "comment_count": video_data["comment_count"]
-            }).execute()
-            st.success(f"✅ Added new project: {video_data['p_title']}")
+        if not url_input or not email or not name:
+            st.error("Please fill in all required fields.")
+        elif not st.session_state.selected_roles:
+            st.error("Please add at least one role.")
         else:
-            st.info(f"📽 Project already exists: {existing[0]['p_title']}")
+            video_id = extract_video_id(url_input)
+            if not video_id:
+                st.error("❌ Invalid YouTube URL.")
+                st.stop()
 
-        # Upsert user
-        user = supabase.table("users").upsert({
-            "u_email": email, "u_name": name, "u_bio": bio
-        }).execute()
-        u_id = user.data[0]["u_id"]
+            # Check if project exists
+            existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
+            if existing:
+                project = existing[0]
+                st.info(f"📽 Project already exists: {project['p_title']}")
+            else:
+                # Fetch from YouTube and insert
+                video_data = fetch_youtube_data(video_id)
+                if not video_data:
+                    st.error("❌ Could not fetch video info from YouTube API.")
+                    st.stop()
 
-        # Insert roles
-        for r in roles_selected:
-            supabase.table("user_projects").insert({
-                "u_id": u_id, "p_id": video_id, "u_role": r
-            }).execute()
-        st.success(f"🎉 {name} credited for: {', '.join(roles_selected)}")
+                supabase.table("projects").insert({
+                    "p_id": video_data["p_id"],
+                    "p_title": video_data["p_title"],
+                    "p_description": video_data["p_description"],
+                    "p_link": video_data["p_link"],
+                    "p_platform": "youtube",
+                    "p_channel": video_data["p_channel"],
+                    "p_posted_at": video_data["p_posted_at"],
+                    "p_thumbnail_url": video_data["p_thumbnail_url"]
+                }).execute()
+
+                supabase.table("metrics").insert({
+                    "p_id": video_data["p_id"],
+                    "view_count": video_data["view_count"],
+                    "like_count": video_data["like_count"],
+                    "comment_count": video_data["comment_count"]
+                }).execute()
+
+                st.success(f"✅ Added new project: {video_data['p_title']}")
+
+            # Ensure user exists
+            user = supabase.table("users").upsert({
+                "u_email": email,
+                "u_name": name,
+                "u_bio": bio
+            }, on_conflict=["u_email"]).execute()
+
+            user_record = supabase.table("users").select("u_id").eq("u_email", email).execute()
+            u_id = user_record.data[0]["u_id"]
+
+            # Add all roles
+            for role_entry in st.session_state.selected_roles:
+                category, role_name = role_entry.split(" - ")
+                supabase.table("user_projects").insert({
+                    "u_id": u_id,
+                    "p_id": video_id,
+                    "u_role": role_name
+                }).execute()
+
+            st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
+            st.balloons()
+            st.session_state.selected_roles = []
 
 # -------------------------------
 # PAGE 3: EXPLORE
