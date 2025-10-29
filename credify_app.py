@@ -1,52 +1,52 @@
 import streamlit as st
 from supabase import create_client, Client
+import pandas as pd
+import re
+import requests
 
-# -----------------------------
-# --- Initialize Supabase ---
-# -----------------------------
+# -------------------------------
+# INITIAL SETUP
+# -------------------------------
+st.set_page_config(page_title="Credify", layout="wide")
+
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.set_page_config(page_title="Credify", layout="wide", initial_sidebar_state="expanded")
-
-# -----------------------------
-# --- THEME SETTINGS ---
-# -----------------------------
+# -------------------------------
+# GLOBAL STYLES (DARK / LIGHT)
+# -------------------------------
 def set_app_theme(mode):
     if mode == "Dark":
         st.markdown("""
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Space+Grotesk:wght@400;600&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
             <style>
-            header {visibility: hidden;}
-            .block-container {
-                padding-top: 1rem;
-                padding-bottom: 0rem;
-                padding-left: 3rem;
-                padding-right: 3rem;
-            }
             body, .stApp {
                 background-color: #0B0C10 !important;
                 color: #F2F4F8 !important;
-                font-family: 'Inter', sans-serif;
-            }
-            h1, h2, h3, h4, h5 {
-                font-family: 'Space Grotesk', sans-serif;
-                letter-spacing: -0.5px;
-                color: #FFFFFF !important;
             }
             .stSidebar {
                 background-color: #111418 !important;
                 color: #E8E8E8 !important;
             }
-            a {
-                color: #1DB954 !important;
-                text-decoration: none;
+            h1, h2, h3, h4, h5, h6, p, span, div {
+                color: #F2F4F8 !important;
             }
-            .stTextInput>div>div>input {
+            a { 
+                color: #1DB954 !important; 
+                text-decoration: none; 
+            }
+            .stTextInput>div>div>input,
+            .stTextArea>div>div>textarea,
+            .stSelectbox>div>div>select {
                 background-color: #1C1F24 !important;
                 color: #F2F4F8 !important;
                 border: 1px solid #333 !important;
+            }
+            .stTextInput>div>div>input:focus,
+            .stTextArea>div>div>textarea:focus {
+                border-color: #1DB954 !important;
+                box-shadow: 0 0 0 1px #1DB954 !important;
             }
             .project-card {
                 background-color: #181C20;
@@ -59,42 +59,14 @@ def set_app_theme(mode):
                 transform: translateY(-3px);
                 box-shadow: 0 4px 16px rgba(0,0,0,0.6);
             }
-            .mono {
-                font-family: 'IBM Plex Mono', monospace;
-                font-size: 0.9rem;
-                color: #9BD4A1 !important;
-            }
             </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Space+Grotesk:wght@400;600&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
             <style>
-            header {visibility: hidden;}
-            .block-container {
-                padding-top: 1rem;
-                padding-bottom: 0rem;
-                padding-left: 3rem;
-                padding-right: 3rem;
-            }
-            body, .stApp {
-                background-color: #FFFFFF !important;
-                color: #222 !important;
-                font-family: 'Inter', sans-serif;
-            }
-            h1, h2, h3, h4, h5 {
-                font-family: 'Space Grotesk', sans-serif;
-                letter-spacing: -0.5px;
-                color: #111 !important;
-            }
-            .stSidebar {
-                background-color: #F8F8F8 !important;
-                color: #111 !important;
-            }
-            a {
-                color: #0B5FFF !important;
-                text-decoration: none;
-            }
+            body, .stApp { background-color: #FFFFFF !important; color: #222 !important; }
+            .stSidebar { background-color: #F8F8F8 !important; }
+            a { color: #0B5FFF !important; text-decoration: none; }
             .project-card {
                 background-color: #F9F9F9;
                 border-radius: 10px;
@@ -102,132 +74,229 @@ def set_app_theme(mode):
                 margin-bottom: 16px;
                 box-shadow: 0 1px 5px rgba(0,0,0,0.1);
             }
-            .mono {
-                font-family: 'IBM Plex Mono', monospace;
-                font-size: 0.9rem;
-                color: #333 !important;
-            }
             </style>
         """, unsafe_allow_html=True)
 
-# -----------------------------
-# --- SIDEBAR LAYOUT ---
-# -----------------------------
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/727/727245.png", width=30)
-st.sidebar.markdown("## Credify")
 
-menu = st.sidebar.radio(" ", ["Profile", "Claim Credits", "Explore"], label_visibility="collapsed")
+# -------------------------------
+# HELPERS
+# -------------------------------
+def extract_video_id(url):
+    pattern = r"(?:v=|youtu\.be/|embed/)([a-zA-Z0-9_-]{11})"
+    match = re.search(pattern, url)
+    return match.group(1) if match else None
 
-# -----------------------------
-# --- SETTINGS PANEL ---
-# -----------------------------
-with st.sidebar.expander("⚙️ Settings"):
-    display_mode = st.radio("Display mode:", ["Light", "Dark"], index=1, horizontal=True)
-set_app_theme(display_mode)
 
-# -----------------------------
-# --- PROFILE PAGE ---
-# -----------------------------
-if menu == "Profile":
-    st.title("👤 Marcos Micozzi")
+def fetch_youtube_data(video_id):
+    url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={YOUTUBE_API_KEY}"
+    res = requests.get(url)
+    data = res.json()
 
-    # Fetch user from Supabase (temporary until login system)
-    user_res = supabase.table("users").select("*").eq("u_email", "micozzimarcos@gmail.com").execute()
+    if "items" not in data or not data["items"]:
+        return None
+
+    item = data["items"][0]
+    snippet = item["snippet"]
+    stats = item.get("statistics", {})
+
+    return {
+        "p_id": video_id,
+        "p_title": snippet.get("title"),
+        "p_description": snippet.get("description"),
+        "p_link": f"https://www.youtube.com/watch?v={video_id}",
+        "p_channel": snippet.get("channelTitle"),
+        "p_posted_at": snippet.get("publishedAt"),
+        "p_thumbnail_url": snippet["thumbnails"]["high"]["url"],
+        "view_count": int(stats.get("viewCount", 0)),
+        "like_count": int(stats.get("likeCount", 0)),
+        "comment_count": int(stats.get("commentCount", 0))
+    }
+
+# -------------------------------
+# PAGE 1: DASHBOARD
+# -------------------------------
+def show_dashboard():
+    st.title("🌟 Creator Dashboard")
+
+    email = st.text_input("Enter your email to load your dashboard:")
+    if not email:
+        st.info("👆 Enter your email above to view your personalized dashboard.")
+        return
+
+    user_res = supabase.table("users").select("*").eq("u_email", email).execute()
     if not user_res.data:
-        st.error("User not found in database.")
-    else:
-        user = user_res.data[0]
-        u_id = user["u_id"]
+        st.error("❌ No user found with this email.")
+        return
 
-        # Fetch metrics summary
-        metrics_res = supabase.table("user_metrics").select("*").eq("u_id", u_id).execute()
-        metrics = metrics_res.data[0] if metrics_res.data else {
-            "total_view_count": 0,
-            "total_like_count": 0,
-            "total_comment_count": 0,
-            "total_share_count": 0,
-            "avg_engagement_rate": 0
-        }
+    user = user_res.data[0]
+    u_id = user["u_id"]
 
-        # Profile Header
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.image("https://api.dicebear.com/7.x/identicon/svg?seed=" + user["u_name"], width=100)
-        with col2:
-            st.subheader(user["u_name"])
-            st.caption(user["u_email"])
+    metrics_res = supabase.table("user_metrics").select("*").eq("u_id", u_id).execute()
+    metrics = metrics_res.data[0] if metrics_res.data else {
+        "total_view_count": 0, "total_like_count": 0,
+        "total_comment_count": 0, "total_share_count": 0,
+        "avg_engagement_rate": 0
+    }
 
-        st.divider()
+    # Profile
+    st.markdown("### 👤 Profile Overview")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.image(f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}", width=100)
+    with col2:
+        st.subheader(user["u_name"])
+        st.write(user["u_email"])
+        if user.get("u_bio"): st.caption(user["u_bio"])
 
-        # Metrics Summary
-        st.markdown("### 📊 Performance Summary")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Views", f"{metrics['total_view_count']:,}")
-        col2.metric("Likes", f"{metrics['total_like_count']:,}")
-        col3.metric("Comments", f"{metrics['total_comment_count']:,}")
-        col4.metric("Shares", f"{metrics['total_share_count']:,}")
-        col5.metric("Engagement Rate", f"{metrics['avg_engagement_rate']:.2f}%")
+    st.divider()
 
-        st.divider()
+    # Metrics
+    st.markdown("### 📊 Performance Summary")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Views", f"{metrics['total_view_count']:,}")
+    col2.metric("Likes", f"{metrics['total_like_count']:,}")
+    col3.metric("Comments", f"{metrics['total_comment_count']:,}")
+    col4.metric("Shares", f"{metrics['total_share_count']:,}")
+    col5.metric("Engagement Rate", f"{metrics['avg_engagement_rate']:.2f}%")
 
-        # Projects Section
-        st.markdown("### 🎬 Your Projects")
-        projects_response = supabase.table("user_projects") \
-            .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
-            .eq("u_id", u_id) \
-            .execute()
+    st.divider()
 
-        if not projects_response.data:
-            st.info("You haven't been credited on any projects yet.")
+    # Projects
+    st.markdown("### 🎬 Your Projects")
+
+    projects_response = supabase.table("user_projects") \
+        .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
+        .eq("u_id", u_id).execute()
+    data = projects_response.data
+
+    if not data:
+        st.info("You haven’t been credited on any projects yet.")
+        return
+
+    # Avoid duplicate projects
+    unique_projects = {}
+    for rec in data:
+        pid = rec["projects"]["p_id"]
+        role = rec["u_role"]
+        if pid not in unique_projects:
+            unique_projects[pid] = {"project": rec["projects"], "roles": [role]}
         else:
-            # Deduplicate projects (some users have multiple roles)
-            unique_projects = {}
-            for record in projects_response.data:
-                project = record["projects"]
-                pid = project["p_id"]
-                if pid not in unique_projects:
-                    unique_projects[pid] = {
-                        "p_title": project["p_title"],
-                        "p_link": project["p_link"],
-                        "p_thumbnail_url": project["p_thumbnail_url"],
-                        "roles": [record["u_role"]]
-                    }
-                else:
-                    unique_projects[pid]["roles"].append(record["u_role"])
+            unique_projects[pid]["roles"].append(role)
 
-            # Fetch metrics & sort by most viewed
-            enriched_projects = []
-            for pid, data in unique_projects.items():
-                m = supabase.table("latest_metrics").select("view_count, like_count, comment_count").eq("p_id", pid).execute()
-                if m.data:
-                    data.update(m.data[0])
-                else:
-                    data.update({"view_count": 0, "like_count": 0, "comment_count": 0})
-                enriched_projects.append(data)
+    # Sort by views
+    sorted_projects = []
+    for pid, rec in unique_projects.items():
+        metric_res = supabase.table("latest_metrics").select("view_count").eq("p_id", pid).execute()
+        views = metric_res.data[0]["view_count"] if metric_res.data else 0
+        rec["views"] = views
+        sorted_projects.append(rec)
+    sorted_projects = sorted(sorted_projects, key=lambda x: x["views"], reverse=True)
 
-            enriched_projects.sort(key=lambda x: x["view_count"], reverse=True)
+    cols = st.columns(3)
+    for i, rec in enumerate(sorted_projects):
+        proj = rec["project"]
+        roles = ", ".join(rec["roles"])
+        with cols[i % 3]:
+            st.markdown("<div class='project-card'>", unsafe_allow_html=True)
+            st.image(proj["p_thumbnail_url"], use_container_width=True)
+            st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n🎭 *{roles}*")
+            mres = supabase.table("latest_metrics").select("view_count, like_count, comment_count").eq("p_id", proj["p_id"]).execute()
+            if mres.data:
+                m = mres.data[0]
+                st.caption(f"👁️ {m['view_count']} | 👍 {m['like_count']} | 💬 {m['comment_count']}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            # Display grid
-            cols = st.columns(3)
-            for i, p in enumerate(enriched_projects):
-                with cols[i % 3]:
-                    st.markdown("<div class='project-card'>", unsafe_allow_html=True)
-                    st.image(p["p_thumbnail_url"], use_container_width=True)
-                    st.markdown(f"**[{p['p_title']}]({p['p_link']})**")
-                    st.caption("🎭 " + ", ".join(p["roles"]))
-                    st.caption(f"👁️ {p['view_count']} | 👍 {p['like_count']} | 💬 {p['comment_count']}")
-                    st.markdown("</div>", unsafe_allow_html=True)
+# -------------------------------
+# PAGE 2: CLAIM CREDITS
+# -------------------------------
+def show_claim_page():
+    st.title("🎬 Claim Your Role on a Project")
 
-# -----------------------------
-# --- CLAIM PAGE ---
-# -----------------------------
-elif menu == "Claim Credits":
-    st.title("🎧 Claim Credits")
-    st.info("Here you’ll be able to verify and add your roles to existing projects.")
+    url_input = st.text_input("Paste a YouTube URL")
+    name = st.text_input("Full name")
+    email = st.text_input("Email")
+    bio = st.text_area("Short bio (optional)")
 
-# -----------------------------
-# --- EXPLORE PAGE ---
-# -----------------------------
-elif menu == "Explore":
-    st.title("🌍 Explore")
-    st.info("Discover trending projects, collaborators, and stats from across the platform.")
+    # Fetch dynamic roles
+    roles_data = supabase.table("roles").select("role_name, category").execute().data
+    categories = sorted(list(set(r["category"] for r in roles_data)))
+    cat = st.selectbox("Select category", categories)
+    available_roles = [r["role_name"] for r in roles_data if r["category"] == cat]
+
+    roles_selected = []
+    role = st.selectbox("Select role", available_roles)
+    if st.button("➕ Add Role"):
+        roles_selected.append(role)
+
+    if st.button("Claim Role"):
+        video_id = extract_video_id(url_input)
+        if not video_id:
+            st.error("❌ Invalid YouTube URL.")
+            return
+
+        # Check or create project
+        existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
+        if not existing:
+            video_data = fetch_youtube_data(video_id)
+            if not video_data:
+                st.error("❌ Could not fetch video data.")
+                return
+            supabase.table("projects").insert(video_data).execute()
+            supabase.table("metrics").insert({
+                "p_id": video_id,
+                "view_count": video_data["view_count"],
+                "like_count": video_data["like_count"],
+                "comment_count": video_data["comment_count"]
+            }).execute()
+            st.success(f"✅ Added new project: {video_data['p_title']}")
+        else:
+            st.info(f"📽 Project already exists: {existing[0]['p_title']}")
+
+        # Upsert user
+        user = supabase.table("users").upsert({
+            "u_email": email, "u_name": name, "u_bio": bio
+        }).execute()
+        u_id = user.data[0]["u_id"]
+
+        # Insert roles
+        for r in roles_selected:
+            supabase.table("user_projects").insert({
+                "u_id": u_id, "p_id": video_id, "u_role": r
+            }).execute()
+        st.success(f"🎉 {name} credited for: {', '.join(roles_selected)}")
+
+# -------------------------------
+# PAGE 3: EXPLORE
+# -------------------------------
+def show_explore_page():
+    st.title("🔍 Explore Public Projects")
+    st.info("This section will display trending creators and top-viewed projects soon.")
+
+# -------------------------------
+# PAGE 4: SETTINGS
+# -------------------------------
+def show_settings_page():
+    st.title("⚙️ Settings")
+    st.info("Settings and customization options will go here.")
+
+# -------------------------------
+# SIDEBAR NAVIGATION
+# -------------------------------
+with st.sidebar:
+    st.title("🎧 Credify")
+    theme = st.radio("Display mode:", ["Light", "Dark"], index=1)
+    page = st.radio("Navigate to:", ["Dashboard", "Claim Credits", "Explore", "Settings"])
+
+set_app_theme(theme)
+
+# -------------------------------
+# PAGE ROUTING
+# -------------------------------
+if page == "Dashboard":
+    show_dashboard()
+elif page == "Claim Credits":
+    show_claim_page()
+elif page == "Explore":
+    show_explore_page()
+else:
+    show_settings_page()
