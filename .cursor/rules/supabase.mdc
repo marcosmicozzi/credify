@@ -1,0 +1,26 @@
+---
+description: Supabase client usage, RLS expectations, and query patterns
+globs: *.py
+---
+# Supabase Usage
+
+## Client
+
+- Create the client from Streamlit secrets as in [credify_app.py](mdc:credify_app.py) and [dashboard.py](mdc:dashboard.py).
+- Keep one client per script; do not recreate per request.
+
+## RLS and security
+
+- All tables must have Row Level Security enabled and policies restricting access per user when using the anon key from Streamlit secrets.
+- Never embed service keys in the client; only use the anon key.
+
+## Query patterns
+
+- Prefer batching over N+1. Use `in_("p_id", pids)` to fetch metrics for many projects at once (see `latest_metrics`).
+- Use `upsert` with `on_conflict` when writing idempotent records, e.g., projects and users.
+- Check `.data` presence defensively before indexing results.
+
+## Auth integration
+
+- After OAuth or email/password auth, ensure a row exists in `users` for the email (see [auth.py](mdc:auth.py)).
+

@@ -1,0 +1,25 @@
+---
+globs: *.py
+description: Python style, typing, and error-handling conventions for Credify
+---
+# Python Style and Conventions
+
+## Naming and typing
+
+- Use clear, descriptive names. Prefer full words over abbreviations.
+- Add type hints to function signatures where helpful. Avoid `Any` when possible.
+
+## Control flow
+
+- Prefer guard clauses and early returns to reduce nesting in Streamlit callbacks.
+- Only catch exceptions when you can handle them meaningfully; otherwise let them surface during development.
+
+## HTTP and IO
+
+- Always specify timeouts for network calls (e.g., requests.get(..., timeout=15)).
+- Validate external data (check presence of keys in JSON before indexing).
+
+## Duplication
+
+- Centralize shared helpers (e.g., YouTube ID extraction and fetch) to avoid drift across files like [credify_app.py](mdc:credify_app.py) and [claim_role.py](mdc:claim_role.py).
+

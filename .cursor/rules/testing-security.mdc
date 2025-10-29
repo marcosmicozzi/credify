@@ -1,0 +1,21 @@
+---
+description: Testing guidelines and security practices for Credify
+globs: *.py
+---
+# Testing and Security
+
+## Testing
+
+- Prefer pytest for unit tests.
+- Add tests for YouTube ID extraction and metrics calculations.
+- Mock network calls and Supabase interactions in tests.
+- Treat Streamlit demo scripts ([test_supabase.py](mdc:test_supabase.py), [test_youtube_fetch.py](mdc:test_youtube_fetch.py)) as manual demos, not automated tests.
+
+## Security
+
+- Use the anon key only; never store service role keys in client code.
+- Ensure RLS policies exist on user-owned tables (`users`, `user_projects`, `user_metrics`).
+- Escape or avoid unsafe HTML when rendering external or user-provided content in Streamlit.
+- Validate and normalize inputs (emails to lowercase, URLs sanitized) before persisting.
+- Add timeouts and handle unsuccessful responses for all external HTTP requests.
+

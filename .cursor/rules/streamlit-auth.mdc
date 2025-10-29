@@ -1,0 +1,27 @@
+---
+description: Streamlit UI and auth patterns for Credify
+globs: *.py
+---
+# Streamlit and Auth Guidance
+
+## Session and login
+
+- The login flow and helpers live in [auth.py](mdc:auth.py). Use show_login() to render the auth UI and set st.session_state["user"].
+- In app pages (e.g., [credify_app.py](mdc:credify_app.py)), gate content with:
+  - if "user" not in st.session_state: show_login(); st.stop()
+  - Provide a logout_button() that clears session state and reruns.
+
+## UI practices
+
+- Prefer safe rendering. Avoid unsafe_allow_html=True when interpolating user or external content. If necessary, escape dynamic strings.
+- Keep layout minimal; reference the theme CSS sections in [credify_app.py](mdc:credify_app.py) and [dashboard.py](mdc:dashboard.py).
+
+## Inputs and validation
+
+- Trim and validate emails and URLs. Normalize emails to lowercase before storage.
+- Show informative errors and stop the script with st.stop() for invalid input.
+
+## Network reliability
+
+- Add timeouts to external requests (e.g., YouTube API) and handle non-OK responses.
+

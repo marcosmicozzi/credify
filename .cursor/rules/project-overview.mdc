@@ -1,0 +1,33 @@
+---
+alwaysApply: true
+---
+# Credify Project Overview
+
+This repository contains a Streamlit app that integrates with Supabase and the YouTube Data API.
+
+## Entry points and key files
+
+- Main multi-page app: [credify_app.py](mdc:credify_app.py)
+- Auth helpers and login flows: [auth.py](mdc:auth.py)
+- Standalone dashboard (legacy/alternate view): [dashboard.py](mdc:dashboard.py)
+- Standalone ingestion tool: [add_to_supabase.py](mdc:add_to_supabase.py)
+- Standalone claim flow: [claim_role.py](mdc:claim_role.py)
+- Metrics aggregation utility script: [update_user_metrics.py](mdc:update_user_metrics.py)
+- Demo scripts for manual testing:
+  - [test_supabase.py](mdc:test_supabase.py)
+  - [test_youtube_fetch.py](mdc:test_youtube_fetch.py)
+
+## Data model (high-level)
+
+- Tables expected in Supabase: `users`, `projects`, `user_projects`, `metrics`, `latest_metrics`, `user_metrics`, `roles`.
+- Users are identified by `u_email` and `u_id`. Projects are keyed by YouTube `p_id`.
+
+## Navigation
+
+- The Streamlit sidebar in [credify_app.py](mdc:credify_app.py) routes between: Dashboard, Claim Credits, Explore, Settings.
+
+## Implementation guidance
+
+- Prefer adding shared logic in small helpers (e.g., YouTube fetch, ID extraction) and reuse across pages.
+- Avoid duplicating dashboards or flows; converge on `credify_app.py` unless there is a strong reason.
+
