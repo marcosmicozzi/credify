@@ -35,6 +35,20 @@ def ensure_user_in_db(user):
 def show_login():
     st.title("🔐 Credify Login")
 
+    # Optional Demo Mode: allow local testing without real auth
+    demo_mode_enabled = str(st.secrets.get("DEMO_MODE", "false")).lower() == "true"
+    if demo_mode_enabled:
+        if st.button("Continue as Demo User"):
+            class _DemoUser:
+                def __init__(self, email: str):
+                    self.email = email
+
+            demo_user = _DemoUser("demo_user@example.com")
+            st.session_state["user"] = demo_user
+            ensure_user_in_db(demo_user)
+            st.success("✅ Running in Demo Mode as demo_user@example.com")
+            st.rerun()
+
     # --- Handle OAuth redirect ---
     query_params = st.query_params
     if "code" in query_params:

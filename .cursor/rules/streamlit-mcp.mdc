@@ -1,0 +1,15 @@
+---
+description: Mandatory Streamlit MCP usage for Credify
+globs: *.py
+---
+
+# Streamlit MCP Rule
+
+- Always use the Streamlit MCP integration for any Streamlit-related code, tooling, or queries. No exceptions.
+- When rendering UI, managing session, or handling auth via Streamlit, prefer MCP-provided helpers and calls where available.
+- If MCP is unavailable or misconfigured, block the operation and surface a clear error guiding how to fix MCP configuration.
+
+## Enforcement guidance
+
+- Before calling `streamlit` APIs directly, check that the Streamlit MCP is available and route through its wrappers.
+- For tasks involving Streamlit, use workspace MCP wrappers and helpers instead of direct `st.*` calls where wrappers exist.

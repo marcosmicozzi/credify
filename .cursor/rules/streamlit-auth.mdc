@@ -25,3 +25,9 @@ globs: *.py
 
 - Add timeouts to external requests (e.g., YouTube API) and handle non-OK responses.
 
+## MCP routing (mandatory)
+
+- Always route any Streamlit-related actions (UI rendering, session, auth, config) through the available Streamlit MCP integration. No exceptions.
+- Prefer MCP-provided helpers/wrappers over direct `st.*` calls when wrappers exist.
+- If MCP is unavailable or misconfigured, do not proceed; surface a clear error instructing how to enable/configure MCP.
+

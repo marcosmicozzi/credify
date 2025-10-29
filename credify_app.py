@@ -22,6 +22,16 @@ st.markdown("""
   transition:opacity .2s ease-in-out;
 }
 [data-testid="collapsedControl"]:hover {opacity:1 !important; transform:scale(1.1);}
+/* Logout button styling */
+button[data-testid="stBaseButton-secondary"] {
+  background-color: #333 !important;
+  color: #E8E8E8 !important;
+  border: 1px solid #555 !important;
+}
+button[data-testid="stBaseButton-secondary"]:hover {
+  background-color: #444 !important;
+  border-color: #666 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
