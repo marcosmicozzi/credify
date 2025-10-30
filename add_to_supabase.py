@@ -4,14 +4,15 @@ from supabase import create_client, Client
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 import re
+import os
 
 # --- Load secrets ---
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
-YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 # --- Init Supabase client ---
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("🎬 Add YouTube Project to Supabase")
 

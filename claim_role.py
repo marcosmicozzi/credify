@@ -2,13 +2,14 @@ import streamlit as st
 from supabase import create_client, Client
 import re
 import requests
+import os
 
 # --- Setup Supabase client ---
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 st.title("🎬 Claim Your Role on a Project via YouTube URL")
 

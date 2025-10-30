@@ -1,12 +1,13 @@
 import streamlit as st
 from supabase import create_client, Client
 from urllib.parse import urlparse, parse_qs
+import os
 
 # -------------------------------
 # SUPABASE CONNECTION
 # -------------------------------
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------------

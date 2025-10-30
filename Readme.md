@@ -87,6 +87,61 @@ Security and RLS:
 ### License
 MIT (or your preferred license). Update this section as needed.
 
+# IMPORTANT ENVIRONMENT SETUP
+
+> **Before installing packages or running this app, always run:**
+>
+>     conda activate MarcosPython10
+
+This ensures all required dependencies are available and prevents confusing errors during development or Google sign-in.
+
+# Environment Variables Setup (Recommended)
+
+Instead of using `.streamlit/secrets.toml`, you can store your Supabase credentials as environment variables for improved security.
+
+## Option 1: Using a `.env` File (Recommended for local/dev)
+
+1. **Install python-dotenv** (if not already):
+   ```bash
+   pip install python-dotenv
+   ```
+2. **Create a file named `.env` in your project root:**
+   ```env
+   SUPABASE_URL="https://your-project.supabase.co"
+   SUPABASE_KEY="your_supabase_anon_key"
+   ```
+   - **DO NOT** commit `.env` to git. Add it to your `.gitignore`.
+
+3. **Load .env in your code:**
+   ```python
+   from dotenv import load_dotenv
+   load_dotenv()  # load env vars before using them
+
+   import os
+   SUPABASE_URL = os.getenv("SUPABASE_URL")
+   SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+   ```
+
+
+## Option 2: Exporting in Your Shell
+
+1. **Export in your terminal:**
+   ```bash
+   export SUPABASE_URL="https://your-project.supabase.co"
+   export SUPABASE_KEY="your_supabase_anon_key"
+   ```
+2. Then run your app in the same shell session.
+
+## In Your App Imports
+No matter the method, use this in your Streamlit app:
+```python
+import os
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+```
+--
+**Benefits:** Keeps secrets out of your repo. Cursor/tooling can still launch and use your app — without seeing your secrets.
+
 
 
 
