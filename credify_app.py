@@ -309,7 +309,7 @@ def show_profile():
     pids = list(unique_projects.keys())
     metrics_map = {}
     if pids:
-        metrics_resp = supabase.table("latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
+        metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
         for m in (metrics_resp.data or []):
             metrics_map[m["p_id"]] = {
                 "view_count": m.get("view_count", 0) or 0,
@@ -409,7 +409,7 @@ def render_add_credit_form():
                 "p_thumbnail_url": video_data["p_thumbnail_url"]
             }).execute()
 
-            supabase.table("metrics").insert({
+            supabase.table("youtube_metrics").insert({
                 "p_id": video_data["p_id"],
                 "view_count": video_data["view_count"],
                 "like_count": video_data["like_count"],

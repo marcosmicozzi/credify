@@ -85,7 +85,7 @@ if st.button("Add to Supabase") and url:
 
     # --- Write to Supabase ---
     supabase.table("projects").upsert(project, on_conflict="p_id").execute()
-    supabase.table("metrics").insert(metric).execute()
+    supabase.table("youtube_metrics").insert(metric).execute()
 
     st.success(f"✅ Added '{snip['title']}' to Supabase!")
     st.image(project["p_thumbnail_url"])

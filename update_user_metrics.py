@@ -28,7 +28,7 @@ def update_user_metrics(u_email: str):
         return
 
     # 3. Get latest metrics for each project
-    metrics_resp = supabase.table("latest_metrics").select("*").in_("p_id", project_ids).execute()
+    metrics_resp = supabase.table("youtube_latest_metrics").select("*").in_("p_id", project_ids).execute()
     if not metrics_resp.data:
         print(f"⚠️ No metrics found for user's projects")
         return
