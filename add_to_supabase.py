@@ -4,12 +4,18 @@ from supabase import create_client, Client
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 import re
-import os
 
-# --- Load secrets ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+# --- Load secrets (Streamlit) ---
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+YOUTUBE_API_KEY = st.secrets.get("YOUTUBE_API_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("Missing Supabase credentials in .streamlit/secrets.toml")
+    st.stop()
+if not YOUTUBE_API_KEY:
+    st.error("Missing YOUTUBE_API_KEY in .streamlit/secrets.toml")
+    st.stop()
 
 # --- Init Supabase client ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

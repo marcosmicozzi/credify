@@ -3,28 +3,36 @@ from supabase import create_client, Client
 import pandas as pd
 import re
 import requests
-from auth import show_login, logout_button  # 👈 auth.py we built earlier
-from dotenv import load_dotenv
-load_dotenv()
+from auth import show_login, logout_button  # logout now handled in topbar menu
 import os
 
 # -------------------------------
 # INITIAL SETUP
 # -------------------------------
-st.set_page_config(page_title="Credify", layout="wide")
+st.set_page_config(page_title="Credify", layout="wide", initial_sidebar_state="expanded")
 
 # Remove Streamlit header / padding
 st.markdown("""
 <style>
 [data-testid="stHeader"] {display:none !important;}
 .block-container {padding-top:0rem !important;}
-.stSidebar > div:first-child {padding-top:0.5rem !important;}
-[data-testid="collapsedControl"] {
-  display:block !important; visibility:visible !important;
-  color:#1DB954 !important; opacity:0.9 !important; z-index:9999 !important;
-  transition:opacity .2s ease-in-out;
+.stSidebar > div:first-child {margin-top: var(--topbar-h); padding-top: 20px !important;}
+[data-testid="collapsedControl"] {display:none !important;}
+/* Hide any Streamlit-provided sidebar collapse/expand controls (compat with multiple versions) */
+button[title*="Hide sidebar"],
+button[title*="Show sidebar"],
+[data-testid="stSidebarNavCollapse"],
+[data-testid="stSidebarCollapseControl"],
+[data-testid="stSidebarCollapseButton"] { display:none !important; }
+/* Force sidebar to remain visible and fixed width */
+[data-testid="stSidebar"] { 
+  visibility: visible !important; 
+  transform: translateX(0) !important; 
+  width: 240px !important; 
 }
-[data-testid="collapsedControl"]:hover {opacity:1 !important; transform:scale(1.1);}
+[data-testid="stSidebar"] > div:first-child { width: 240px !important; }
+/* Ensure main content accounts for fixed sidebar width */
+[data-testid="stAppViewContainer"] > .main { margin-left: 0 !important; }
 /* Logout button styling */
 button[data-testid="stBaseButton-secondary"] {
   background-color: #333 !important;
@@ -39,11 +47,20 @@ button[data-testid="stBaseButton-secondary"]:hover {
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# SUPABASE CLIENT
+# SUPABASE CLIENT (via Streamlit secrets)
 # -------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
-YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+YOUTUBE_API_KEY = st.secrets.get("YOUTUBE_API_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .streamlit/secrets.toml")
+    st.stop()
+
+if not YOUTUBE_API_KEY:
+    st.error("Missing YOUTUBE_API_KEY in .streamlit/secrets.toml")
+    st.stop()
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------------
@@ -54,49 +71,118 @@ if "user" not in st.session_state:
     st.stop()
 
 user_email = st.session_state["user"].email
-logout_button()
-st.sidebar.success(f"Logged in as {user_email}")
+normalized_email = user_email.lower()
+# Logout and login notice now live under the avatar menu in the topbar
 
 # -------------------------------
-# THEME SETTINGS
+# THEME SETTINGS — single light monochrome palette
 # -------------------------------
-def set_app_theme(mode):
-    if mode == "Dark":
-        st.markdown("""
-            <style>
-            body,.stApp{background-color:#0B0C10 !important;color:#F2F4F8 !important;}
-            .stSidebar{background-color:#111418 !important;color:#E8E8E8 !important;}
-            h1,h2,h3,h4,h5,h6,p,span,div{color:#F2F4F8 !important;}
-            a{color:#1DB954 !important;text-decoration:none;}
-            .stTextInput>div>div>input,
-            .stTextArea>div>div>textarea,
-            .stSelectbox>div>div>select{
-                background-color:#1C1F24 !important;color:#F2F4F8 !important;
-                border:1px solid #333 !important;
-            }
-            .project-card{
-                background-color:#181C20;border-radius:10px;padding:10px;margin-bottom:16px;
-                box-shadow:0 2px 12px rgba(0,0,0,0.5);
-                transition:transform .2s ease, box-shadow .2s ease;
-            }
-            .project-card:hover{
-                transform:translateY(-3px);
-                box-shadow:0 4px 16px rgba(0,0,0,0.6);
-            }
-            </style>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-            <style>
-            body,.stApp{background-color:#FFFFFF !important;color:#222 !important;}
-            .stSidebar{background-color:#F8F8F8 !important;}
-            a{color:#0B5FFF !important;text-decoration:none;}
-            .project-card{
-                background-color:#F9F9F9;border-radius:10px;padding:10px;
-                margin-bottom:16px;box-shadow:0 1px 5px rgba(0,0,0,0.1);
-            }
-            </style>
-        """, unsafe_allow_html=True)
+def apply_theme(_: str | None = None):
+    # Fixed monochrome palette
+    primary = "#2E2E2E"
+    background = "#FFFFFF"
+    secondary_bg = "#F4F4F4"
+    text = "#111111"
+    border = "#E0E0E0"
+    border2 = "#C8C8C8"
+
+    css_vars = {
+        "--bg": background,
+        "--text": text,
+        "--sidebar": secondary_bg,
+        "--card": secondary_bg,
+        "--border": border,
+        "--border-2": border2,
+        "--input": "#FFFFFF",
+        "--muted": secondary_bg,
+        "--primary": primary,
+        "--link": primary
+    }
+
+    vars_css = ":root{" + ";".join([f"{k}:{v}" for k, v in css_vars.items()]) + "}"
+
+    st.markdown(f"""
+        <style>
+        {vars_css}
+        body,.stApp{{background-color:var(--bg) !important;color:var(--text) !important;}}
+        .stSidebar{{background-color:var(--sidebar) !important;color:var(--text) !important;border-right:1px solid var(--border);box-shadow: 2px 0 6px rgba(0,0,0,.06);}}
+        .block-container{{max-width:1100px !important;margin:0 auto !important;padding:48px 32px !important;}}
+        section {{padding: 0 !important;}}
+        h1,h2,h3,h4,h5,h6,p,span,div{{color:var(--text) !important;}}
+        a{{color:var(--link) !important;text-decoration:none;}}
+        *{{font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif !important;}}
+
+        /* Typography hierarchy */
+        h1{{font-size:40px !important;font-weight:800 !important;margin-bottom:16px !important;}}
+        h2{{font-size:22px !important;font-weight:700 !important;margin-top:8px !important;}}
+        p{{font-size:16px !important;font-weight:400 !important;}}
+
+        /* Inputs */
+        .stTextInput>div>div>input,
+        .stTextArea>div>div>textarea,
+        .stSelectbox>div>div>select{{
+            background-color:var(--input) !important;color:var(--text) !important;
+            border:1px solid var(--border) !important;
+        }}
+        /* Baseweb Select dropdown */
+        div[data-baseweb="select"]>div{{background-color:var(--input) !important;color:var(--text) !important;border-color:var(--border) !important;}}
+        div[data-baseweb="select"] [role="listbox"]{{background-color:var(--input) !important;color:var(--text) !important;border:1px solid var(--border) !important;}}
+        div[data-baseweb="select"] [role="option"]{{color:var(--text) !important;background-color:var(--input) !important;}}
+        div[data-baseweb="select"] [aria-selected="true"]{{background-color:var(--card) !important;}}
+
+        /* Buttons (monochrome) */
+        .stButton>button{{background-color:var(--input) !important;color:var(--text) !important;border:1px solid var(--border) !important;}}
+        .stButton>button:hover{{filter:brightness(0.97);border-color:var(--border-2) !important;}}
+        /* Primary buttons */
+        .stButton>button[kind="primary"],
+        button[data-testid="baseButton-primary"]{{background-color:var(--primary) !important;color:#FFFFFF !important;border:1px solid var(--primary) !important;}}
+        .stButton>button[kind="primary"]:hover,
+        button[data-testid="baseButton-primary"]:hover{{filter:brightness(0.95);}}
+
+        /* Radios/checkboxes accent to match primary */
+        div[data-baseweb="radio"] svg{{fill:var(--primary) !important;}}
+        div[role="radio"][aria-checked="true"]>div{{border-color:var(--primary) !important;}}
+
+        /* Popovers */
+        div[data-testid="stPopover"],
+        div[data-testid="stPopoverBody"]{{background-color:var(--input) !important;color:var(--text) !important;border:1px solid var(--border) !important;}}
+        div[data-testid="stPopover" ] *,
+        div[data-testid="stPopoverBody"] *{{color:var(--text) !important;}}
+        div[data-testid="stPopover"] .stButton>button,
+        div[data-testid="stPopoverBody"] .stButton>button{{background-color:var(--input) !important;color:var(--text) !important;border:1px solid var(--border) !important;}}
+        div[data-testid="stPopover"] .stButton>button:hover,
+        div[data-testid="stPopoverBody"] .stButton>button:hover{{filter:brightness(0.97);border-color:var(--border-2) !important;}}
+
+        /* Cards */
+        .card, .project-card{{
+            background-color:#FFFFFF;border-radius:12px;padding:16px;margin-bottom:16px;
+            border:1px solid #E6E6E6; box-shadow:0 2px 6px rgba(0,0,0,0.08);
+            transition:transform .15s ease, box-shadow .15s ease;
+        }}
+        .card:hover, .project-card:hover{{
+            transform:translateY(-2px);
+            box-shadow:0 4px 12px rgba(0,0,0,0.10);
+        }}
+        .card-title{{font-weight:700;margin-bottom:8px;}}
+        .page-section{{margin: 24px 0 32px 0;}}
+
+        /* Fixed Top Navigation */
+        :root{{--topbar-h:56px;}}
+        .topnav{{position:fixed;top:0;left:0;right:0;height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 24px;background:#FFFFFF;border-bottom:1px solid #E6E6E6;box-shadow:0 1px 2px rgba(0,0,0,.04);z-index:1000;}}
+        .topnav .brand{{font-weight:800;font-size:18px;}}
+        .topnav .actions{{display:flex;align-items:center;gap:12px;}}
+        .topnav .avatar{{width:28px;height:28px;border-radius:50%;background:#E6E6E6;display:inline-block;}}
+        /* Offset main container below fixed topbar */
+        [data-testid="stAppViewContainer"] > .main {{padding-top: calc(var(--topbar-h) + 8px) !important;}}
+
+        /* Sidebar navigation styling */
+        [data-testid="stSidebar"] [role="radiogroup"] label p{{font-size:15px !important;font-weight:600 !important;}}
+        [data-testid="stSidebar"] [role="radio"][aria-checked="true"]{{background:#FFFFFF;border:1px solid #E6E6E6;border-radius:999px;padding:6px 10px;}}
+        [data-testid="stSidebar"] [role="radio"]{{border-radius:999px;padding:6px 10px;}}
+        [data-testid="stSidebar"] [role="radio"]:hover{{background:#FFFFFFaa}}
+        .sb-brand{{font-weight:800;font-size:18px;margin:0 0 12px 0;}}
+        </style>
+    """, unsafe_allow_html=True)
 
 # -------------------------------
 # HELPERS
@@ -109,9 +195,14 @@ def extract_video_id(url):
 
 def fetch_youtube_data(video_id):
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={YOUTUBE_API_KEY}"
-    res = requests.get(url)
-    data = res.json()
-    if "items" not in data or not data["items"]:
+    res = requests.get(url, timeout=15)
+    if not res.ok:
+        return None
+    try:
+        data = res.json()
+    except Exception:
+        return None
+    if "items" not in data or not data.get("items"):
         return None
 
     item = data["items"][0]
@@ -131,13 +222,13 @@ def fetch_youtube_data(video_id):
     }
 
 # -------------------------------
-# PAGE 1 — DASHBOARD
+# PAGE 1 — PROFILE (replaces Dashboard)
 # -------------------------------
-def show_dashboard():
-    st.title("🌟 Creator Dashboard")
+def show_profile():
+    st.title("Profile")
 
     # Get user info
-    user_res = supabase.table("users").select("*").eq("u_email", user_email).execute()
+    user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
     if not user_res.data:
         st.info("No profile found yet — one will be created after your first claim.")
         return
@@ -153,8 +244,7 @@ def show_dashboard():
         "avg_engagement_rate": 0
     }
 
-    # Profile
-    st.markdown("### 👤 Profile Overview")
+    # Profile header spacing retained, label removed per request
     col1, col2 = st.columns([1, 3])
     with col1:
         st.image(f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}", width=100)
@@ -167,7 +257,7 @@ def show_dashboard():
     st.divider()
 
     # Metrics
-    st.markdown("### 📊 Performance Summary")
+    st.markdown("### Performance Summary")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Views", f"{metrics['total_view_count']:,}")
     col2.metric("Likes", f"{metrics['total_like_count']:,}")
@@ -177,8 +267,25 @@ def show_dashboard():
 
     st.divider()
 
+    # Add Credit entry point (opens inline section)
+    if "show_add_credit" not in st.session_state:
+        st.session_state.show_add_credit = False
+
+    with st.container():
+        cols_ac = st.columns([1, 5])
+        with cols_ac[0]:
+            if st.button("Add Credits"):
+                st.session_state.show_add_credit = not st.session_state.show_add_credit
+        with cols_ac[1]:
+            st.caption("Claim credits by pasting a YouTube URL and selecting roles.")
+
+    if st.session_state.show_add_credit:
+        st.markdown("#### Add New Credit")
+        render_add_credit_form()
+        st.divider()
+
     # Projects
-    st.markdown("### 🎬 Your Projects")
+    st.markdown("### Your Credits")
     projects_response = supabase.table("user_projects") \
         .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
         .eq("u_id", u_id).execute()
@@ -198,12 +305,23 @@ def show_dashboard():
         else:
             unique_projects[pid]["roles"].append(role)
 
-    # Sort by views
+    # Sort by views (batch metrics fetch to avoid N+1)
+    pids = list(unique_projects.keys())
+    metrics_map = {}
+    if pids:
+        metrics_resp = supabase.table("latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
+        for m in (metrics_resp.data or []):
+            metrics_map[m["p_id"]] = {
+                "view_count": m.get("view_count", 0) or 0,
+                "like_count": m.get("like_count", 0) or 0,
+                "comment_count": m.get("comment_count", 0) or 0,
+            }
+
     sorted_projects = []
     for pid, rec in unique_projects.items():
-        metric_res = supabase.table("latest_metrics").select("view_count").eq("p_id", pid).execute()
-        views = metric_res.data[0]["view_count"] if metric_res.data else 0
-        rec["views"] = views
+        rec_metrics = metrics_map.get(pid, {"view_count": 0, "like_count": 0, "comment_count": 0})
+        rec["views"] = rec_metrics["view_count"]
+        rec["metrics"] = rec_metrics
         sorted_projects.append(rec)
     sorted_projects = sorted(sorted_projects, key=lambda x: x["views"], reverse=True)
 
@@ -216,18 +334,12 @@ def show_dashboard():
             st.markdown("<div class='project-card'>", unsafe_allow_html=True)
             st.image(proj["p_thumbnail_url"], use_container_width=True)
             st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n🎭 *{roles}*")
-            mres = supabase.table("latest_metrics").select("view_count, like_count, comment_count").eq("p_id", proj["p_id"]).execute()
-            if mres.data:
-                m = mres.data[0]
-                st.caption(f"👁️ {m['view_count']} | 👍 {m['like_count']} | 💬 {m['comment_count']}")
+            m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
+            st.caption(f"Views: {m['view_count']} | Likes: {m['like_count']} | Comments: {m['comment_count']}")
             st.markdown("</div>", unsafe_allow_html=True)
 
-# -------------------------------
-# PAGE 2 — CLAIM CREDITS
-# -------------------------------
-def show_claim_page():
-    st.title("🎬 Claim Your Role on a Project via YouTube URL")
-
+def render_add_credit_form():
+    """Inline claim form reused inside Profile."""
     url_input = st.text_input("Paste a YouTube URL")
     name = st.text_input("Full name")
     bio = st.text_area("Short bio (optional)")
@@ -308,12 +420,12 @@ def show_claim_page():
 
         # Ensure user exists / update
         supabase.table("users").upsert({
-            "u_email": user_email,
+            "u_email": normalized_email,
             "u_name": name,
             "u_bio": bio
         }, on_conflict=["u_email"]).execute()
 
-        user_record = supabase.table("users").select("u_id").eq("u_email", user_email).execute()
+        user_record = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
         u_id = user_record.data[0]["u_id"]
 
         for role_entry in st.session_state.selected_roles:
@@ -331,35 +443,94 @@ def show_claim_page():
 # -------------------------------
 # PAGE 3 — EXPLORE
 # -------------------------------
-def show_explore_page():
-    st.title("🔍 Explore Public Projects")
-    st.info("This section will display trending creators soon.")
+def show_home_page():
+    st.title("Home")
+    left, right = st.columns([2,1])
+    with left:
+        st.markdown("<div class='page-section card'><div class='card-title'>For You</div><p>Your personalized feed will appear here.</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='card'><div class='card-title'>Recent Highlights</div><p>Coming soon: recent credits and updates.</p></div>", unsafe_allow_html=True)
+    with right:
+        st.markdown("<div class='card'><div class='card-title'>Right Panel</div><p>Placeholder for charts or top creators.</p></div>", unsafe_allow_html=True)
+
+
+def show_notifications_page():
+    st.title("Notifications")
+    # Basic recent credit events inferred from user_projects
+    user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
+    if not user_res.data:
+        st.info("No notifications yet.")
+        return
+    u_id = user_res.data[0]["u_id"]
+
+    results = supabase.table("user_projects").select("u_role, projects(p_title)").eq("u_id", u_id).order("created_at", desc=True).limit(25).execute()
+    items = results.data or []
+    if not items:
+        st.info("No recent activity.")
+        return
+    for it in items:
+        title = it.get("projects", {}).get("p_title", "Project")
+        role = it.get("u_role", "Role")
+        st.write(f"✅ Credit accepted: {role} on {title}")
 
 # -------------------------------
 # PAGE 4 — SETTINGS
 # -------------------------------
+def show_analytics_page():
+    st.title("Analytics")
+    st.markdown("<div class='card page-section'><div class='card-title'>YouTube Performance</div><p>Summary of your credited projects.</p></div>", unsafe_allow_html=True)
+
+
 def show_settings_page():
-    st.title("⚙️ Settings")
+    st.title("Settings")
     st.info("Profile editing and preferences coming soon.")
+
+
+# -------------------------------
+# TOP BAR (avatar + notifications)
+# -------------------------------
+def show_topbar():
+    # Simple fixed top navigation with placeholders
+    st.markdown(
+        """
+        <div class='topnav'>
+          <div class='brand'>Credify</div>
+          <div class='actions'>
+            <span>💬</span>
+            <span>🔔</span>
+            <span class='avatar'></span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
 with st.sidebar:
-    st.title("🎧 Credify")
-    theme = st.radio("Display mode:", ["Light", "Dark"], index=1)
-    page = st.radio("Navigate to:", ["Dashboard", "Claim Credits", "Explore", "Settings"])
+    st.markdown("<div class='sb-brand'>Credify</div>", unsafe_allow_html=True)
+    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Settings"], index=1)
 
-set_app_theme(theme)
+apply_theme()
+
+# Render top bar with avatar and bell
+show_topbar()
 
 # -------------------------------
 # PAGE ROUTING
 # -------------------------------
-if page == "Dashboard":
-    show_dashboard()
-elif page == "Claim Credits":
-    show_claim_page()
-elif page == "Explore":
-    show_explore_page()
+override = st.session_state.get("page_override")
+if override:
+    page = override
+    st.session_state["page_override"] = None
+
+if page == "Home":
+    show_home_page()
+elif page == "Profile":
+    show_profile()
+elif page == "Analytics":
+    show_analytics_page()
+elif page == "Notifications":
+    show_notifications_page()
 else:
     show_settings_page()

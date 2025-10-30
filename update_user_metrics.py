@@ -1,11 +1,13 @@
 import streamlit as st
 from supabase import create_client
 from datetime import datetime
-import os
 
 # --- Read secrets from .streamlit/secrets.toml ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("Missing Supabase credentials in .streamlit/secrets.toml")
+    raise SystemExit(1)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Helper Function ---

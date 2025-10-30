@@ -3,19 +3,19 @@
 Streamlit app that lets creators claim credits on YouTube projects and aggregates performance metrics via Supabase and the YouTube Data API.
 
 ### Features
-- **Authentication**: Lightweight login flow integrated into Streamlit (`auth.py`).
-- **Dashboard**: Personal metrics and credited projects.
-- **Claim Credits**: Claim roles on a YouTube video by URL with role taxonomy.
+- **Single entry app**: Multi‑page Streamlit app in `credify_app.py` (Dashboard, Claim Credits, Explore, Settings).
+- **Authentication**: Login flow via `auth.py` helpers.
+- **Dashboard**: Personal metrics and credited projects (batch metrics queries).
+- **Claim Credits**: Claim roles on a YouTube video URL with role taxonomy.
 - **Metrics**: Fetches and stores YouTube statistics; summary metrics per user.
 
 ### Project structure
-- `credify_app.py`: Main multi‑page Streamlit app (Dashboard, Claim Credits, Explore, Settings)
+- `credify_app.py`: Main multi‑page Streamlit app (single entry)
 - `auth.py`: Auth helpers (login UI, logout controls)
-- `dashboard.py`: Legacy/alternate view
-- `add_to_supabase.py`: Standalone ingestion helper
-- `claim_role.py`: Standalone claim flow (older script)
 - `update_user_metrics.py`: Aggregates metrics per user
+- `add_to_supabase.py`: Standalone ingestion helper (optional)
 - `test_supabase.py`, `test_youtube_fetch.py`: Manual demo scripts
+- Legacy (removed): `dashboard.py`, `claim_role.py`
 
 ### Prerequisites
 - Python 3.10+
@@ -32,16 +32,20 @@ source .venv/bin/activate
 
 2) Install dependencies
 ```bash
-pip install streamlit supabase python supabase==2.* requests pandas
+pip install -r requirements.txt
 ```
 
-3) Configure secrets for Streamlit
+3) Configure secrets for Streamlit (do not commit)
 Create `.streamlit/secrets.toml` at the repo root:
 ```toml
 SUPABASE_URL = "https://YOUR-PROJECT.ref.supabase.co"
 SUPABASE_ANON_KEY = "YOUR-ANON-KEY"
 YOUTUBE_API_KEY = "YOUR-YOUTUBE-API-KEY"
+# Optional: enable demo login button
+DEMO_MODE = "true"
 ```
+
+Ensure `.streamlit/` is listed in `.gitignore` (it is). Keep this file local and untracked.
 
 4) Run the app
 ```bash
@@ -67,6 +71,42 @@ Security and RLS:
 - Claiming a role by YouTube URL will create the `projects` row (if missing), insert an initial `metrics` snapshot, upsert the `users` record, and link via `user_projects`.
 - The Dashboard reads `user_metrics` and `latest_metrics` for a quick overview.
 
+### Secrets handling
+- Keep `.streamlit/secrets.toml` local and untracked (already ignored by `.gitignore`).
+- If secrets were never committed or pushed, they are not exposed.
+- If secrets were ever committed/pushed, immediately rotate them with your provider and purge them from git history (see next section).
+
+### If secrets were committed: rotation and repo history purge
+1) Rotate keys with providers
+   - Supabase: create a new anon key and revoke the old one.
+   - YouTube Data API: regenerate the API key and restrict it as needed.
+
+2) Remove tracked secrets file and commit
+```bash
+git rm --cached .streamlit/secrets.toml
+echo "# keep local only" >> .streamlit/secrets.toml
+git commit -m "Remove tracked secrets file"
+```
+
+3) Purge from history (choose one tool)
+- Using git-filter-repo (recommended):
+```bash
+pip install git-filter-repo
+git filter-repo --path .streamlit/secrets.toml --invert-paths
+```
+- Using BFG Repo-Cleaner:
+```bash
+java -jar bfg.jar --delete-files secrets.toml
+git reflog expire --expire=now --all && git gc --prune=now --aggressive
+```
+
+4) Force-push rewritten history (shared repos only if you understand the impact)
+```bash
+git push --force
+```
+
+5) Recreate/redeploy any environments with new keys
+
 ### Development guidelines
 - Python style: prefer clear names, add type hints to function signatures where helpful, prefer guard clauses, avoid broad try/except. Add timeouts to network calls.
 - Streamlit auth: gate pages with `if "user" not in st.session_state: show_login(); st.stop()` and provide a `logout_button()`.
@@ -79,7 +119,7 @@ Security and RLS:
 - `test_supabase.py`, `test_youtube_fetch.py`: manual checks for local setup.
 
 ### Troubleshooting
-- Missing or wrong secrets: ensure `.streamlit/secrets.toml` exists with correct keys and the app restarted.
+- Missing or wrong secrets: ensure `.streamlit/secrets.toml` exists locally with `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `YOUTUBE_API_KEY` and restart the app.
 - 401/403 from Supabase: verify anon key, RLS policies, and table names.
 - YouTube API errors: confirm the API key is enabled for the YouTube Data API and not rate‑limited.
 - Import errors: confirm virtualenv is active and dependencies installed.
@@ -87,60 +127,10 @@ Security and RLS:
 ### License
 MIT (or your preferred license). Update this section as needed.
 
-# IMPORTANT ENVIRONMENT SETUP
+### Notes on configuration
 
-> **Before installing packages or running this app, always run:**
->
->     conda activate MarcosPython10
-
-This ensures all required dependencies are available and prevents confusing errors during development or Google sign-in.
-
-# Environment Variables Setup (Recommended)
-
-Instead of using `.streamlit/secrets.toml`, you can store your Supabase credentials as environment variables for improved security.
-
-## Option 1: Using a `.env` File (Recommended for local/dev)
-
-1. **Install python-dotenv** (if not already):
-   ```bash
-   pip install python-dotenv
-   ```
-2. **Create a file named `.env` in your project root:**
-   ```env
-   SUPABASE_URL="https://your-project.supabase.co"
-   SUPABASE_KEY="your_supabase_anon_key"
-   ```
-   - **DO NOT** commit `.env` to git. Add it to your `.gitignore`.
-
-3. **Load .env in your code:**
-   ```python
-   from dotenv import load_dotenv
-   load_dotenv()  # load env vars before using them
-
-   import os
-   SUPABASE_URL = os.getenv("SUPABASE_URL")
-   SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-   ```
-
-
-## Option 2: Exporting in Your Shell
-
-1. **Export in your terminal:**
-   ```bash
-   export SUPABASE_URL="https://your-project.supabase.co"
-   export SUPABASE_KEY="your_supabase_anon_key"
-   ```
-2. Then run your app in the same shell session.
-
-## In Your App Imports
-No matter the method, use this in your Streamlit app:
-```python
-import os
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-```
---
-**Benefits:** Keeps secrets out of your repo. Cursor/tooling can still launch and use your app — without seeing your secrets.
+- The app now reads all credentials from `st.secrets`; `.env` files are not required.
+- For local development, prefer `.streamlit/secrets.toml` so Streamlit’s sharing/deployments map cleanly.
 
 
 

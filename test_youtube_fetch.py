@@ -3,11 +3,13 @@ import streamlit as st
 import re
 import requests
 from urllib.parse import urlparse, parse_qs
-import os
 
 st.title("YouTube Fetch Test")
 
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_API_KEY = st.secrets.get("YOUTUBE_API_KEY")
+if not YOUTUBE_API_KEY:
+    st.error("Missing YOUTUBE_API_KEY in .streamlit/secrets.toml")
+    st.stop()
 
 def extract_video_id(url: str) -> str | None:
     # handles https://www.youtube.com/watch?v=ID and youtu.be/ID etc.

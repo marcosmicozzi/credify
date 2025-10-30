@@ -1,13 +1,17 @@
 import streamlit as st
 from supabase import create_client, Client
 from urllib.parse import urlparse, parse_qs
-import os
 
 # -------------------------------
-# SUPABASE CONNECTION
+# SUPABASE CONNECTION (via Streamlit secrets)
 # -------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .streamlit/secrets.toml")
+    st.stop()
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------------------
@@ -16,7 +20,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def ensure_user_in_db(user):
     """Ensures a Supabase Auth user has a matching record in the users table."""
     try:
-        user_email = user.email
+        user_email = user.email.lower()
         user_name = user.email.split("@")[0]
 
         existing = supabase.table("users").select("*").eq("u_email", user_email).execute()
