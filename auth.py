@@ -423,7 +423,7 @@ def show_login():
             
             # Use link_button for direct redirect (no intermediate click)
             st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
-            st.link_button("Continue with Google", oauth_url, use_container_width=True, key="google_button")
+            st.link_button("Continue with Google", oauth_url, use_container_width=True)
             st.markdown("</div>", unsafe_allow_html=True)
         else:
             raise Exception("OAuth response missing URL")
