@@ -597,7 +597,7 @@ def show_profile():
     st.markdown(f"""
         <div style="text-align: center; margin-bottom: 24px;">
             <img src="{avatar_url}" 
-                 style="width: 140px; height: 140px; border-radius: 50%; margin-bottom: 12px; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
+                 style="width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
         </div>
     """, unsafe_allow_html=True)
     
