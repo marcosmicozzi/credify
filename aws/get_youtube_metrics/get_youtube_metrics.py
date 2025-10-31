@@ -47,6 +47,22 @@ def lambda_handler(event, context):
             "comment_count": comment_count
         }
 
+        # Deduplicate same-day inserts: skip if a row exists today for this p_id
+        try:
+            # Compute UTC day start iso
+            day_start_iso = payload["fetched_at"][:10] + "T00:00:00Z"
+            # Query existing rows for today
+            select_url = (
+                f"{SUPABASE_URL}/rest/v1/youtube_metrics"
+                f"?p_id=eq.{vid}&fetched_at=gte.{day_start_iso}&select=p_id&limit=1"
+            )
+            sel = requests.get(select_url, headers=headers, timeout=20)
+            if sel.ok and sel.json():
+                print(f"Skipping insert for {vid} — already have a snapshot today")
+                continue
+        except Exception as e:
+            print(f"Warning: dedupe check failed for {vid}: {e}")
+
         # Insert into Supabase youtube_metrics
         supabase_response = requests.post(
             f"{SUPABASE_URL}/rest/v1/youtube_metrics",

@@ -207,6 +207,15 @@ def apply_theme(_: str | None = None):
         [data-testid="stSidebar"] [role="radio"]{{border-radius:999px;padding:6px 10px;}}
         [data-testid="stSidebar"] [role="radio"]:hover{{background:#FFFFFFaa}}
         .sb-brand{{font-weight:800;font-size:18px;margin:0 0 12px 0;}}
+        
+        /* Metric value font size - smaller to prevent truncation */
+        [data-testid="stMetricValue"] {{
+            font-size: 20px !important;
+            line-height: 1.2 !important;
+        }}
+        [data-testid="stMetricLabel"] {{
+            font-size: 12px !important;
+        }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -247,6 +256,60 @@ def fetch_youtube_data(video_id):
         "comment_count": int(stats.get("commentCount", 0))
     }
 
+
+def fetch_live_metrics_for_user(u_id: str) -> dict[str, dict[str, int]] | None:
+    """Fetch live metrics from YouTube API without storing them.
+    
+    This is for display-only purposes. The live snapshot is NOT persisted to the database.
+    Only AWS Lambda should write to youtube_metrics for daily snapshots.
+    
+    Args:
+        u_id: User ID to fetch live metrics for
+        
+    Returns:
+        Dictionary mapping p_id to metrics dict, or None if error
+    """
+    # 1. Get all project IDs for this user
+    projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+    project_ids = [p["p_id"] for p in projects_resp.data]
+    
+    if not project_ids:
+        return {}
+    
+    # 2. Batch fetch from YouTube API (max 50 IDs per request)
+    batch_size = 50
+    live_metrics = {}
+    
+    for i in range(0, len(project_ids), batch_size):
+        batch_ids = project_ids[i:i + batch_size]
+        ids_comma = ",".join(batch_ids)
+        
+        # Fetch statistics for this batch
+        url = f"https://www.googleapis.com/youtube/v3/videos?part=statistics&id={ids_comma}&key={YOUTUBE_API_KEY}"
+        try:
+            res = requests.get(url, timeout=20)
+            if not res.ok:
+                continue
+            data = res.json()
+            if not data.get("items"):
+                continue
+            
+            # Extract metrics without storing
+            for item in data["items"]:
+                p_id = item["id"]
+                stats = item.get("statistics", {})
+                live_metrics[p_id] = {
+                    "view_count": int(stats.get("viewCount", 0)),
+                    "like_count": int(stats.get("likeCount", 0)),
+                    "comment_count": int(stats.get("commentCount", 0)),
+                    "share_count": 0,  # YouTube API doesn't provide share_count
+                }
+        except Exception:
+            # Skip failed batches, continue with next
+            continue
+    
+    return live_metrics if live_metrics else None
+
 # -------------------------------
 # ANALYTICS HELPERS (daily time series)
 # -------------------------------
@@ -264,7 +327,12 @@ def get_current_user_id() -> str | None:
 
 
 def update_user_metrics(u_id: str):
-    """Recalculate and update user_metrics for a given user based on their projects."""
+    """Recalculate and update user_metrics for a given user based on their projects.
+    
+    This function aggregates stored snapshots from youtube_latest_metrics (which references
+    daily snapshots written by AWS Lambda). It does NOT fetch live data from YouTube API.
+    For live metrics, use fetch_live_metrics_for_user() instead.
+    """
     # 1. Find all project IDs for this user
     projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
     project_ids = [p["p_id"] for p in projects_resp.data]
@@ -282,9 +350,9 @@ def update_user_metrics(u_id: str):
         return
 
     # 2. Get latest metrics for each project
-    # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+    # Try youtube_latest_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
     try:
-        metrics_resp = supabase.table("latest_youtube_metrics").select("p_id, view_count, like_count, comment_count, share_count").in_("p_id", project_ids).execute()
+        metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count, share_count, fetched_at").in_("p_id", project_ids).execute()
         latest_metrics = list(metrics_resp.data or [])
     except Exception:
         # Fallback: query youtube_metrics and get the latest entry per project
@@ -301,6 +369,7 @@ def update_user_metrics(u_id: str):
                     "like_count": m.get("like_count", 0) or 0,
                     "comment_count": m.get("comment_count", 0) or 0,
                     "share_count": m.get("share_count", 0) or 0,  # May not exist in youtube_metrics
+                    "fetched_at": m.get("fetched_at"),  # Required for freshness guard
                 })
                 seen_pids.add(pid)
     
@@ -316,6 +385,19 @@ def update_user_metrics(u_id: str):
             "updated_at": datetime.utcnow().isoformat()
         }).execute()
         return
+
+    # 2b. Freshness guard: if user_metrics.updated_at >= max(latest fetched_at), skip recompute
+    try:
+        # Compute latest fetched_at across this user's projects
+        latest_ts_candidates = [m.get("fetched_at") for m in latest_metrics if m.get("fetched_at")]
+        if latest_ts_candidates:
+            latest_ts = max(latest_ts_candidates)
+            um_res = supabase.table("user_metrics").select("updated_at").eq("u_id", u_id).execute()
+            if um_res.data and um_res.data[0].get("updated_at") and um_res.data[0]["updated_at"] >= latest_ts:
+                return
+    except Exception:
+        # If anything goes wrong, proceed with recompute to be safe
+        pass
 
     # 3. Aggregate totals
     total_views = sum(m.get("view_count", 0) or 0 for m in latest_metrics)
@@ -361,50 +443,85 @@ def fetch_user_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: st
     if not pids:
         return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
 
-    # Pull snapshots within window for these pids
-    # Note: Supabase range filters are inclusive
-    ym = supabase.table("youtube_metrics") \
+    # Parse date range in UTC for consistent comparison
+    start_dt_utc = pd.to_datetime(start_date_iso, utc=True)
+    end_dt_utc = pd.to_datetime(end_date_iso, utc=True)
+    
+    # Query includes one day BEFORE start_date to get baseline for diff calculation
+    # This ensures the first day in the range has a previous value to compare against
+    query_start = (start_dt_utc - pd.Timedelta(days=1)).isoformat()
+    
+    # Check if there's ANY data for these projects (without date filter) for debugging
+    all_metrics_check = supabase.table("youtube_metrics") \
+        .select("p_id, fetched_at, view_count, like_count, comment_count") \
+        .in_("p_id", pids) \
+        .order("fetched_at", desc=False) \
+        .limit(1) \
+        .execute()
+    
+    # Fetch two sets:
+    # 1) Baseline: latest snapshot BEFORE start_dt_utc for each p_id
+    baseline_resp = supabase.table("youtube_metrics") \
+        .select("p_id, fetched_at, view_count, like_count, comment_count") \
+        .in_("p_id", pids) \
+        .lt("fetched_at", start_date_iso) \
+        .order("fetched_at", desc=True) \
+        .limit(10000) \
+        .execute()
+
+    # Deduplicate to keep latest-before-start per p_id
+    baseline_rows = []
+    seen = set()
+    for r in (baseline_resp.data or []):
+        pid = r.get("p_id")
+        if pid and pid not in seen:
+            baseline_rows.append(r)
+            seen.add(pid)
+
+    # 2) In-range snapshots: start..end (inclusive)
+    range_resp = supabase.table("youtube_metrics") \
         .select("p_id, fetched_at, view_count, like_count, comment_count") \
         .in_("p_id", pids) \
         .gte("fetched_at", start_date_iso) \
         .lte("fetched_at", end_date_iso) \
         .execute()
-    rows = ym.data or []
+
+    rows = (baseline_rows or []) + (range_resp.data or [])
     if not rows:
+        # If no rows in date range, check if data exists outside the range
+        if all_metrics_check.data:
+            return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
+        # No data at all for these projects
         return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
 
     df = pd.DataFrame(rows)
-    # Normalize timestamps to date (UTC)
+    # Normalize timestamps to UTC and derive date (avoid tz conversion issues)
     df["fetched_at"] = pd.to_datetime(df["fetched_at"], utc=True, errors="coerce")
-    df["date"] = df["fetched_at"].dt.tz_convert("UTC").dt.date
+    df["date"] = df["fetched_at"].dt.date
 
-    # Keep last snapshot per video per day
+    # Keep the last snapshot per video per day
     df_sorted = df.sort_values(["p_id", "date", "fetched_at"])  # ascending so last per group is last row
     last_per_day = df_sorted.groupby(["p_id", "date"], as_index=False).tail(1)
 
-    # Compute per-video daily increments; detect whether values are cumulative or already daily
+    # Compute per‑video daily increments (LAG-style): strictly use day-over-day diffs
     last_per_day = last_per_day.sort_values(["p_id", "date"])  # ensure order
     increments = []
     for pid, group in last_per_day.groupby("p_id", as_index=False):
         g = group.copy()
         for col in ["view_count", "like_count", "comment_count"]:
-            diff = g[col].diff().fillna(0)
-            # Heuristic: if values are mostly non-decreasing across the period, treat as cumulative
-            non_decreasing_ratio = (diff >= 0).mean()
-            if non_decreasing_ratio >= 0.8:
-                vals = diff
-            else:
-                # already daily values
-                vals = g[col]
-            vals = vals.clip(lower=0)
+            vals = g[col].diff().fillna(0).clip(lower=0)
             g[col + "_inc"] = vals
         increments.append(g[["p_id", "date", "view_count_inc", "like_count_inc", "comment_count_inc"]])
     if not increments:
         return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
     inc_df = pd.concat(increments, ignore_index=True)
 
+    # Filter increments to only include dates >= start_date (exclude the baseline day)
+    start_date_only = start_dt_utc.date()
+    inc_df_filtered = inc_df[inc_df["date"] >= start_date_only].copy()
+    
     # Aggregate across videos per day — daily increments
-    agg = inc_df.groupby("date", as_index=False).agg({
+    agg = inc_df_filtered.groupby("date", as_index=False).agg({
         "view_count_inc": "sum",
         "like_count_inc": "sum",
         "comment_count_inc": "sum",
@@ -414,9 +531,16 @@ def fetch_user_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: st
         "comment_count_inc": "comments",
     })
 
+    # Only fill with zeros if we have at least some data in the range
+    # This prevents showing zeros when there's no data at all in the selected period
+    if len(agg) == 0:
+        # No aggregated data means no actual data points in this range
+        return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
+    
     # Ensure full date index for selected range (fill missing days with zeros)
-    start_dt = pd.to_datetime(start_date_iso).date()
-    end_dt = pd.to_datetime(end_date_iso).date()
+    # But only if we have at least one data point
+    start_dt = start_dt_utc.date()
+    end_dt = end_dt_utc.date()
     all_days = pd.date_range(start=start_dt, end=end_dt, freq="D").date
     full = pd.DataFrame({"date": all_days})
     out = full.merge(agg, on="date", how="left")
@@ -441,17 +565,6 @@ def show_profile():
     user = user_res.data[0]
     u_id = user["u_id"]
 
-    # Always recalculate metrics on page load to ensure fresh data
-    update_user_metrics(u_id)
-
-    # Fetch updated metrics
-    metrics_res = supabase.table("user_metrics").select("*").eq("u_id", u_id).execute()
-    metrics = metrics_res.data[0] if metrics_res.data else {
-        "total_view_count": 0, "total_like_count": 0,
-        "total_comment_count": 0, "total_share_count": 0,
-        "avg_engagement_rate": 0
-    }
-
     # Profile header spacing retained, label removed per request
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -464,14 +577,80 @@ def show_profile():
 
     st.divider()
 
-    # Metrics
+    # Metrics - Profile shows live data only
     st.markdown("### Performance Summary")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Views", f"{metrics['total_view_count']:,}")
-    col2.metric("Likes", f"{metrics['total_like_count']:,}")
-    col3.metric("Comments", f"{metrics['total_comment_count']:,}")
-    col4.metric("Shares", f"{metrics['total_share_count']:,}")
-    col5.metric("Engagement Rate", f"{metrics['avg_engagement_rate']:.2f}%")
+    
+    # Live refresh button with cooldown to protect API limits
+    # Store live metrics in session state to persist during user session
+    if "live_metrics" not in st.session_state:
+        st.session_state.live_metrics = None
+    
+    # Auto-fetch live metrics on first page load if not in session
+    if st.session_state.live_metrics is None:
+        with st.spinner("Fetching live metrics..."):
+            live_data = fetch_live_metrics_for_user(u_id)
+            if live_data:
+                st.session_state.live_metrics = live_data
+    
+    cooldown_seconds = 300  # 5 minutes
+    ss_key = "user_refresh_cooldown"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = 0
+    last_ts = st.session_state[ss_key]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    remaining = max(0, int(cooldown_seconds - (now_ts - last_ts)))
+    
+    # Always display live metrics - Profile is live data only
+    if st.session_state.live_metrics:
+        # Aggregate live metrics
+        live_total_views = sum(m["view_count"] for m in st.session_state.live_metrics.values())
+        live_total_likes = sum(m["like_count"] for m in st.session_state.live_metrics.values())
+        live_total_comments = sum(m["comment_count"] for m in st.session_state.live_metrics.values())
+        live_total_shares = sum(m["share_count"] for m in st.session_state.live_metrics.values())
+        live_engagement_rates = []
+        for m in st.session_state.live_metrics.values():
+            views = m["view_count"]
+            if views > 0:
+                engagement = ((m["like_count"] + m["comment_count"] + m["share_count"]) / views) * 100
+                live_engagement_rates.append(engagement)
+        live_avg_engagement = sum(live_engagement_rates) / len(live_engagement_rates) if live_engagement_rates else 0
+        display_metrics = {
+            "total_view_count": live_total_views,
+            "total_like_count": live_total_likes,
+            "total_comment_count": live_total_comments,
+            "total_share_count": live_total_shares,
+            "avg_engagement_rate": live_avg_engagement
+        }
+    else:
+        # No live metrics yet - show zeros while fetching
+        display_metrics = {
+            "total_view_count": 0,
+            "total_like_count": 0,
+            "total_comment_count": 0,
+            "total_share_count": 0,
+            "avg_engagement_rate": 0
+        }
+    
+    # Button row: metrics on left, refresh on right
+    header_cols = st.columns([4, 1])
+    with header_cols[0]:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Views", f"{display_metrics['total_view_count']:,}")
+        col2.metric("Likes", f"{display_metrics['total_like_count']:,}")
+        col3.metric("Comments", f"{display_metrics['total_comment_count']:,}")
+    with header_cols[1]:
+        disabled = remaining > 0
+        label = "🔄 Refresh" if not disabled else f"⏳ {remaining}s"
+        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
+            with st.spinner("Fetching latest metrics from YouTube..."):
+                live_data = fetch_live_metrics_for_user(u_id)
+            if live_data:
+                st.session_state.live_metrics = live_data
+                st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
+                st.success(f"✅ Fetched latest metrics for {len(live_data)} videos!")
+                st.rerun()
+            else:
+                st.warning("Could not fetch live metrics right now.")
 
     st.divider()
 
@@ -517,9 +696,9 @@ def show_profile():
     pids = list(unique_projects.keys())
     metrics_map = {}
     if pids:
-        # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+        # Try youtube_latest_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
         try:
-            metrics_resp = supabase.table("latest_youtube_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
+            metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
             for m in (metrics_resp.data or []):
                 pid = m["p_id"]
                 metrics_map[pid] = {
@@ -559,7 +738,7 @@ def show_profile():
             st.image(proj["p_thumbnail_url"], use_container_width=True)
             st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n🎭 *{roles}*")
             m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
-            st.caption(f"Views: {m['view_count']} | Likes: {m['like_count']} | Comments: {m['comment_count']}")
+            st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
             st.markdown("</div>", unsafe_allow_html=True)
 
 def render_add_credit_form():
@@ -782,9 +961,9 @@ def show_home_page():
     feed_project_ids = [item["p_id"] for item in feed_items if item.get("p_id")]
     project_metrics_map = {}
     if feed_project_ids:
-        # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+        # Try youtube_latest_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
         try:
-            metrics_res = supabase.table("latest_youtube_metrics").select("p_id, view_count").in_("p_id", feed_project_ids).execute()
+            metrics_res = supabase.table("youtube_latest_metrics").select("p_id, view_count").in_("p_id", feed_project_ids).execute()
             for m in (metrics_res.data or []):
                 pid = m["p_id"]
                 project_metrics_map[pid] = m.get("view_count", 0) or 0
@@ -880,7 +1059,7 @@ def show_analytics_page():
     # Controls: range only (daily metrics)
     col_a, col_b = st.columns([1, 2])
     with col_a:
-        preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months", "Custom"], index=1)
+        preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months"], index=2)
     with col_b:
         today = datetime.now(timezone.utc).date()
         if preset == "Last 7 days":
@@ -890,19 +1069,25 @@ def show_analytics_page():
             start_date = today - timedelta(days=27)
             end_date = today
         elif preset == "Last 12 months":
-            start_date = today - timedelta(days=364)
+            start_date = today - timedelta(days=365)  # Full year
             end_date = today
-        else:
-            dates = st.date_input("Custom range", value=(today - timedelta(days=29), today))
-            if isinstance(dates, tuple) and len(dates) == 2:
-                start_date, end_date = dates
-            else:
-                st.warning("Select a start and end date.")
-                return
 
     # Fetch data
     start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     end_iso = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    
+    # Debug: Check what projects and data exist
+    projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+    project_ids = [p["p_id"] for p in (projects_resp.data or [])]
+    
+    # Check if any metrics exist at all for these projects
+    any_metrics_check = supabase.table("youtube_metrics") \
+        .select("p_id, fetched_at, view_count") \
+        .in_("p_id", project_ids) \
+        .order("fetched_at", desc=False) \
+        .limit(5) \
+        .execute()
+    
     with st.spinner("Loading analytics..."):
         ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
         # Fallback: if no rows (e.g., no snapshot today yet), try ending yesterday
@@ -911,10 +1096,58 @@ def show_analytics_page():
             if end_date_fallback >= start_date:
                 end_iso_fb = datetime.combine(end_date_fallback, datetime.max.time(), tzinfo=timezone.utc).isoformat()
                 ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
+    
+    # Debug info (temporary)
+    if ts_df.empty and any_metrics_check.data:
+        with st.expander("🔍 Debug Info (click to expand)", expanded=False):
+            st.write(f"**User ID:** {u_id}")
+            st.write(f"**Linked Projects:** {project_ids}")
+            st.write(f"**Date Range:** {start_date} to {end_date}")
+            st.write(f"**Found {len(any_metrics_check.data)} metric records:**")
+            for m in any_metrics_check.data:
+                st.write(f"  - {m['p_id']}: {m.get('fetched_at', 'N/A')} ({m.get('view_count', 0)} views)")
 
     if ts_df.empty:
-        st.info("No metrics yet. Once your AWS job runs, data will appear here.")
+        if not project_ids:
+            st.info("No projects linked to your account yet. Add credits to get started.")
+            return
+        
+        # Check if any metrics exist for these projects (without date filter)
+        any_metrics = supabase.table("youtube_metrics") \
+            .select("p_id, fetched_at") \
+            .in_("p_id", project_ids) \
+            .order("fetched_at", desc=False) \
+            .limit(1) \
+            .execute()
+        
+        if any_metrics.data:
+            earliest_date = pd.to_datetime(any_metrics.data[0].get("fetched_at", ""))
+            latest_check = supabase.table("youtube_metrics") \
+                .select("p_id, fetched_at") \
+                .in_("p_id", project_ids) \
+                .order("fetched_at", desc=True) \
+                .limit(1) \
+                .execute()
+            latest_date = pd.to_datetime(latest_check.data[0].get("fetched_at", "")) if latest_check.data else None
+            
+            date_range_msg = f"Data exists from {earliest_date.strftime('%Y-%m-%d')}"
+            if latest_date:
+                date_range_msg += f" to {latest_date.strftime('%Y-%m-%d')}"
+            
+            st.warning(
+                f"No metrics found in the selected date range ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}). "
+                f"{date_range_msg}."
+            )
+        else:
+            st.info("No metrics yet. Once your AWS job runs, data will appear here.")
         return
+    
+    # Check if all values are zero (which might indicate a calculation issue)
+    if not ts_df.empty and ts_df[["views", "likes", "comments"]].sum().sum() == 0:
+        # This means we have data in the date range, but all increments calculated to 0
+        # This can happen if there's only one snapshot per video (can't calculate diff)
+        # or if all snapshots have the same values
+        st.info("Data found but all daily increments are zero. This can happen if there's only one snapshot per video or if metrics haven't changed.")
 
     # Inform when data appears too sparse
     num_days = (end_date - start_date).days + 1
