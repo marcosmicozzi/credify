@@ -1323,76 +1323,63 @@ def show_analytics_page():
         </style>
     """, unsafe_allow_html=True)
     
-    # Use Streamlit columns for layout, then add HTML inside each column
+    # Use Streamlit columns for layout with native buttons styled to match
     metric_cols = st.columns(len(metric_options))
-    button_keys_list = []
     
     for idx, metric in enumerate(metric_options):
         with metric_cols[idx]:
             is_selected = st.session_state.selected_analytics_metric == metric
             total = metric_totals[metric]
             button_key = f"metric_btn_{metric}"
-            button_keys_list.append(button_key)
-            selected_class = " selected" if is_selected else ""
             
-            # Create the button and card layout using HTML within the column
+            # Use Streamlit button styled to look like our custom design
+            if st.button(metric, key=button_key, use_container_width=True):
+                st.session_state.selected_analytics_metric = metric
+                st.rerun()
+            
+            # Value card below the button
             st.markdown(f"""
-                <div class="analytics-metric-column-wrapper">
-                    <button class="analytics-metric-button-custom{selected_class}" data-metric-key="{button_key}">{metric}</button>
-                    <div class="analytics-metric-card">
-                        <div class="analytics-metric-value">{total:,}</div>
-                    </div>
+                <div class="analytics-metric-card">
+                    <div class="analytics-metric-value">{total:,}</div>
                 </div>
             """, unsafe_allow_html=True)
     
-    # Create hidden Streamlit buttons for actual click handling
-    for metric in metric_options:
-        button_key = f"metric_btn_{metric}"
-        if st.button("", key=button_key, use_container_width=False):
-            st.session_state.selected_analytics_metric = metric
-            st.rerun()
-    
-    # Hide the invisible Streamlit buttons
+    # Style the Streamlit buttons to match our design
     st.markdown("""
         <style>
+        /* Style all metric buttons to match custom design */
         button[key^="metric_btn_"] {
-            position: absolute !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-            width: 0 !important;
-            height: 0 !important;
-            overflow: hidden !important;
+            background-color: #FFFFFF !important;
+            color: #111111 !important;
+            border: 1px solid #E0E0E0 !important;
+            border-radius: 8px !important;
+            padding: 10px 20px !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease-in-out !important;
+            width: 100% !important;
+            text-align: center !important;
+            font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif !important;
+            margin-bottom: 8px !important;
+        }
+        button[key^="metric_btn_"]:hover {
+            background-color: #F4F4F4 !important;
+            border-color: #E0E0E0 !important;
         }
         </style>
     """, unsafe_allow_html=True)
     
-    # JavaScript to handle button clicks - trigger Streamlit buttons
-    button_keys_js = json.dumps(button_keys_list)
+    # Add dynamic styling for selected button
+    selected_metric = st.session_state.selected_analytics_metric
+    selected_button_key = f"metric_btn_{selected_metric}"
     st.markdown(f"""
-        <script>
-        (function() {{
-            const buttonKeys = {button_keys_js};
-            const metricButtons = document.querySelectorAll('.analytics-metric-button-custom');
-            
-            metricButtons.forEach((btn, idx) => {{
-                btn.addEventListener('click', function(e) {{
-                    e.preventDefault();
-                    const dataKey = this.getAttribute('data-metric-key');
-                    // Find the corresponding Streamlit button by key attribute
-                    const streamlitBtn = document.querySelector('button[key="' + dataKey + '"]');
-                    if (streamlitBtn) {{
-                        streamlitBtn.click();
-                    }} else {{
-                        // Fallback: try finding by buttonKeys array index
-                        const hiddenBtn = document.querySelector('button[key="' + buttonKeys[idx] + '"]');
-                        if (hiddenBtn) {{
-                            hiddenBtn.click();
-                        }}
-                    }}
-                }});
-            }});
-        }})();
-        </script>
+        <style>
+        button[key="{selected_button_key}"] {{
+            background-color: #E0E0E0 !important;
+            border: 2px solid #000000 !important;
+            font-weight: 700 !important;
+        }}
+        </style>
     """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
