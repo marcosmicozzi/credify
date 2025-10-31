@@ -580,15 +580,23 @@ def show_profile():
     user = user_res.data[0]
     u_id = user["u_id"]
 
-    # Profile header with user's name as main heading
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        st.image(f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}", width=100)
-    with col2:
-        # Use the user's name as the page title instead of "Profile"
-        st.markdown(f"<h1 style='margin-bottom: 8px;'>{user['u_name']}</h1>", unsafe_allow_html=True)
-        if user.get("u_bio"):
-            st.markdown(f"<p style='color: #666; margin-top: 8px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+    # Profile header: image centered, name below it (centered)
+    avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
+    st.markdown(f"""
+        <div style="text-align: center; margin-bottom: 24px;">
+            <img src="{avatar_url}" 
+                 style="width: 100px; height: 100px; border-radius: 50%; margin-bottom: 12px;" />
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # User name centered and bold
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 8px; font-weight: 800;'>{user['u_name']}</h1>", unsafe_allow_html=True)
+    
+    # Bio centered below name (if exists)
+    if user.get("u_bio"):
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 8px; margin-bottom: 24px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
     st.divider()
 
