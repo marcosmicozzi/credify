@@ -1245,22 +1245,23 @@ def show_analytics_page():
     # Two-tier layout: buttons (labels) on top, value cards below
     st.markdown("""
         <style>
-        .analytics-metrics-container {
+        .analytics-metrics-wrapper {
             display: flex;
             justify-content: center;
             align-items: flex-start;
             gap: 30px;
             margin-bottom: 24px;
             flex-wrap: wrap;
+            width: 100%;
         }
-        .analytics-metric-column {
+        .analytics-metric-column-wrapper {
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 8px;
             min-width: 120px;
         }
-        .analytics-metric-button {
+        .analytics-metric-button-custom {
             background-color: #FFFFFF;
             color: #111111;
             border: 1px solid #E0E0E0;
@@ -1272,12 +1273,13 @@ def show_analytics_page():
             transition: all 0.2s ease-in-out;
             width: 100%;
             text-align: center;
+            font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
         }
-        .analytics-metric-button:hover {
+        .analytics-metric-button-custom:hover {
             background-color: #F4F4F4;
             border-color: #E0E0E0;
         }
-        .analytics-metric-button.selected {
+        .analytics-metric-button-custom.selected {
             background-color: #E0E0E0;
             border: 2px solid #000000;
             font-weight: 700;
@@ -1290,26 +1292,28 @@ def show_analytics_page():
             width: 100%;
             text-align: center;
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            min-width: 100px;
         }
         .analytics-metric-value {
             font-size: 24px;
             font-weight: 700;
             color: #111111;
             margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
         }
         @media (max-width: 768px) {
-            .analytics-metrics-container {
+            .analytics-metrics-wrapper {
                 gap: 20px;
             }
-            .analytics-metric-column {
+            .analytics-metric-column-wrapper {
                 min-width: 100px;
             }
         }
         @media (max-width: 480px) {
-            .analytics-metrics-container {
+            .analytics-metrics-wrapper {
                 gap: 15px;
             }
-            .analytics-metric-column {
+            .analytics-metric-column-wrapper {
                 min-width: 80px;
             }
             .analytics-metric-value {
@@ -1319,55 +1323,46 @@ def show_analytics_page():
         </style>
     """, unsafe_allow_html=True)
     
-    # Create two-tier layout with buttons and cards
-    metric_html = f"""
-        <div class="analytics-metrics-container">
-    """
-    
+    # Use Streamlit columns for layout, then add HTML inside each column
+    metric_cols = st.columns(len(metric_options))
     button_keys_list = []
-    for metric in metric_options:
-        is_selected = st.session_state.selected_analytics_metric == metric
-        total = metric_totals[metric]
-        button_key = f"metric_btn_{metric}"
-        button_keys_list.append(button_key)
-        selected_class = " selected" if is_selected else ""
-        data_key = button_key.replace("_", "-")  # Use for data attribute
-        
-        metric_html += f"""
-            <div class="analytics-metric-column">
-                <button class="analytics-metric-button{selected_class}" data-metric-key="{button_key}">{metric}</button>
-                <div class="analytics-metric-card">
-                    <div class="analytics-metric-value">{total:,}</div>
+    
+    for idx, metric in enumerate(metric_options):
+        with metric_cols[idx]:
+            is_selected = st.session_state.selected_analytics_metric == metric
+            total = metric_totals[metric]
+            button_key = f"metric_btn_{metric}"
+            button_keys_list.append(button_key)
+            selected_class = " selected" if is_selected else ""
+            
+            # Create the button and card layout using HTML within the column
+            st.markdown(f"""
+                <div class="analytics-metric-column-wrapper">
+                    <button class="analytics-metric-button-custom{selected_class}" data-metric-key="{button_key}">{metric}</button>
+                    <div class="analytics-metric-card">
+                        <div class="analytics-metric-value">{total:,}</div>
+                    </div>
                 </div>
-            </div>
-        """
-    
-    metric_html += """
-        </div>
-    """
-    
-    st.markdown(metric_html, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
     
     # Create hidden Streamlit buttons for actual click handling
-    button_clicked = None
     for metric in metric_options:
         button_key = f"metric_btn_{metric}"
         if st.button("", key=button_key, use_container_width=False):
-            button_clicked = metric
             st.session_state.selected_analytics_metric = metric
             st.rerun()
     
     # Hide the invisible Streamlit buttons
-    st.markdown(f"""
+    st.markdown("""
         <style>
-        button[key^="metric_btn_"] {{
+        button[key^="metric_btn_"] {
             position: absolute !important;
             opacity: 0 !important;
             pointer-events: none !important;
             width: 0 !important;
             height: 0 !important;
             overflow: hidden !important;
-        }}
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -1377,7 +1372,7 @@ def show_analytics_page():
         <script>
         (function() {{
             const buttonKeys = {button_keys_js};
-            const metricButtons = document.querySelectorAll('.analytics-metric-button');
+            const metricButtons = document.querySelectorAll('.analytics-metric-button-custom');
             
             metricButtons.forEach((btn, idx) => {{
                 btn.addEventListener('click', function(e) {{
