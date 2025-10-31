@@ -661,20 +661,20 @@ def show_profile():
             margin: {metrics_top_margin} 0 20px 0;
             flex-wrap: wrap;
         }}
-        .profile-metric-item {
+        .profile-metric-item {{
             text-align: center;
             min-width: 60px;
-        }
-        @media (max-width: 768px) {
-            .profile-metrics-container {
+        }}
+        @media (max-width: 768px) {{
+            .profile-metrics-container {{
                 gap: 30px;
-            }
-        }
-        @media (max-width: 480px) {
-            .profile-metrics-container {
+            }}
+        }}
+        @media (max-width: 480px) {{
+            .profile-metrics-container {{
                 gap: 20px;
-            }
-        }
+            }}
+        }}
         </style>
     """, unsafe_allow_html=True)
     
