@@ -218,6 +218,21 @@ def apply_theme(_: str | None = None):
         [data-testid="stMetricLabel"] {{
             font-size: 12px !important;
         }}
+        
+        /* Add Credits button styling - matches login buttons */
+        .add-credits-button-wrapper button {{
+            background-color: #2E2E2E !important;
+            color: #FFFFFF !important;
+            border: 1px solid #2E2E2E !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+            width: 100% !important;
+        }}
+        .add-credits-button-wrapper button:hover {{
+            background-color: #3A3A3A !important;
+            border-color: #3A3A3A !important;
+        }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -658,13 +673,11 @@ def show_profile():
     if "show_add_credit" not in st.session_state:
         st.session_state.show_add_credit = False
 
-    with st.container():
-        cols_ac = st.columns([1, 5])
-        with cols_ac[0]:
-            if st.button("Add Credits"):
-                st.session_state.show_add_credit = not st.session_state.show_add_credit
-        with cols_ac[1]:
-            st.caption("Claim credits by pasting a YouTube URL and selecting roles.")
+    # Full-width Add Credits button matching login button style
+    st.markdown('<div class="add-credits-button-wrapper">', unsafe_allow_html=True)
+    if st.button("Add Credits", key="add_credits_btn", use_container_width=True):
+        st.session_state.show_add_credit = not st.session_state.show_add_credit
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.show_add_credit:
         st.markdown("#### Add New Credit")
