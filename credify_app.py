@@ -594,15 +594,11 @@ def show_profile():
     
     # Bio centered below name (if exists)
     if user.get("u_bio"):
-        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 8px; margin-bottom: 24px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 8px; margin-bottom: 16px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
     else:
-        st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
-
-    st.divider()
+        st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
 
     # Metrics - Profile shows live data only
-    st.markdown("### Performance Summary")
-    
     # Live refresh button with cooldown to protect API limits
     # Store live metrics in session state to persist during user session
     if "live_metrics" not in st.session_state:
@@ -654,17 +650,47 @@ def show_profile():
             "avg_engagement_rate": 0
         }
     
-    # Button row: metrics on left, refresh on right
-    header_cols = st.columns([4, 1])
-    with header_cols[0]:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Views", f"{display_metrics['total_view_count']:,}")
-        col2.metric("Likes", f"{display_metrics['total_like_count']:,}")
-        col3.metric("Comments", f"{display_metrics['total_comment_count']:,}")
-    with header_cols[1]:
+    # Compact metrics layout: centered stats badge with reduced spacing
+    st.markdown("""
+        <style>
+        .profile-metrics-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 50px;
+            margin: 12px 0 24px 0;
+        }
+        .profile-metric-item {
+            text-align: center;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Metrics displayed in centered compact layout
+    metric_html = f"""
+        <div class="profile-metrics-container">
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Views</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_view_count']:,}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Likes</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_like_count']:,}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Comments</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_comment_count']:,}</div>
+            </div>
+        </div>
+    """
+    st.markdown(metric_html, unsafe_allow_html=True)
+    
+    # Refresh button below metrics (centered, compact)
+    refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 1, 1])
+    with refresh_col2:
         disabled = remaining > 0
         label = "Refresh" if not disabled else f"{remaining}s"
-        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
+        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=False):
             with st.spinner("Fetching latest metrics from YouTube..."):
                 live_data = fetch_live_metrics_for_user(u_id)
             if live_data:
