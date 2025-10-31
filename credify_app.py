@@ -587,74 +587,17 @@ def show_profile():
     user = user_res.data[0]
     u_id = user["u_id"]
 
-    # Profile header: image and name vertically centered as cohesive header section
+    # Profile header: image centered, name below it (centered)
     # Use saved profile image if available, otherwise fall back to generated avatar
     profile_image_url = user.get("profile_image_url")
     if profile_image_url:
         avatar_url = profile_image_url
     else:
         avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
-    
-    # Create a cohesive header section with vertically centered image and name
     st.markdown(f"""
-        <style>
-        .profile-header {{
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 24px;
-            margin-bottom: 24px;
-            flex-wrap: wrap;
-        }}
-        .profile-image-wrapper {{
-            flex-shrink: 0;
-        }}
-        .profile-image {{
-            width: 140px;
-            height: 140px;
-            border-radius: 50%;
-            object-fit: cover;
-            object-position: center;
-            display: block;
-            border: 3px solid #E6E6E6;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }}
-        .profile-name-wrapper {{
-            flex: 1;
-            min-width: 200px;
-            text-align: center;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
-        @media (max-width: 768px) {{
-            .profile-header {{
-                flex-direction: column;
-                gap: 16px;
-            }}
-            .profile-image {{
-                width: 120px;
-                height: 120px;
-            }}
-            .profile-name-wrapper {{
-                text-align: center;
-                min-width: auto;
-            }}
-        }}
-        @media (max-width: 480px) {{
-            .profile-image {{
-                width: 100px;
-                height: 100px;
-            }}
-        }}
-        </style>
-        <div class="profile-header">
-            <div class="profile-image-wrapper">
-                <img src="{avatar_url}" class="profile-image" alt="Profile picture" />
-            </div>
-            <div class="profile-name-wrapper">
-                <h1 style="margin: 0; font-weight: 800; font-size: 2.5rem;">{user['u_name']}</h1>
-            </div>
+        <div style="text-align: center; margin-bottom: 24px;">
+            <img src="{avatar_url}" 
+                 style="width: 140px; height: 140px; border-radius: 50%; margin-bottom: 12px; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
         </div>
     """, unsafe_allow_html=True)
     
@@ -710,11 +653,14 @@ def show_profile():
             "avg_engagement_rate": 0
         }
     
-    # Bio centered below header (if exists) with consistent spacing
-    bio_spacing = "8px" if user.get("u_bio") else "0px"
-    metrics_top_margin = "20px" if user.get("u_bio") else "24px"
+    # User name centered and bold with balanced spacing
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{user['u_name']}</h1>", unsafe_allow_html=True)
+    
+    # Bio centered below name (if exists) with consistent spacing
+    bio_spacing = "4px" if user.get("u_bio") else "0px"
+    metrics_top_margin = "16px" if user.get("u_bio") else "20px"  # Adjust to maintain 20px total spacing
     if user.get("u_bio"):
-        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 0px; margin-bottom: {bio_spacing}; padding: 0 16px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
     
     # Compact metrics layout: centered stats badge with balanced spacing
     # Calculate spacing for equal name-to-metrics and metrics-to-refresh spacing
