@@ -334,84 +334,80 @@ def show_login():
         return
 
     # --- Google Sign-In Button --- (centered)
-    st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
-    if st.button("Continue with Google", use_container_width=True, key="google_auth"):
+    # Generate OAuth URL on page load so we can use it with link_button for direct redirect
+    try:
+        redirect_url = get_redirect_url()
+        debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
+        
+        if debug_mode:
+            st.info(f"🔍 Preparing OAuth with redirect URL: {redirect_url}")
+            st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
+        
+        # Supabase OAuth with dynamic redirect URL
+        res = None
+        last_error = None
+        
+        # Format 1: redirect_to as top-level parameter (most likely correct format)
         try:
-            redirect_url = get_redirect_url()
-            debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
-            
+            res = supabase.auth.sign_in_with_oauth({
+                "provider": "google",
+                "redirect_to": redirect_url
+            })
             if debug_mode:
-                st.info(f"🔍 Preparing OAuth with redirect URL: {redirect_url}")
-                # Show the actual OAuth URL that will be generated
-                st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
-            
-            # Supabase OAuth with dynamic redirect URL
-            # Based on supabase-py documentation, redirect_to should be a top-level parameter
-            # Try multiple formats to ensure compatibility across versions
-            res = None
-            last_error = None
-            
-            # Format 1: redirect_to as top-level parameter (most likely correct format)
+                st.success(f"✅ OAuth URL generated using redirect_to (top level)")
+        except (TypeError, KeyError, AttributeError, Exception) as e1:
+            last_error = e1
+            # Format 2: redirect_to in options (snake_case) - some versions use this
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "redirect_to": redirect_url
+                    "options": {
+                        "redirect_to": redirect_url
+                    }
                 })
                 if debug_mode:
-                    st.success(f"✅ OAuth URL generated using redirect_to (top level)")
-            except (TypeError, KeyError, AttributeError, Exception) as e1:
-                last_error = e1
-                # Format 2: redirect_to in options (snake_case) - some versions use this
+                    st.success(f"✅ OAuth URL generated using redirect_to (in options)")
+            except (TypeError, KeyError, AttributeError, Exception) as e2:
+                last_error = e2
+                # Format 3: redirectTo in options (camelCase) - JS/TS style
                 try:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
                         "options": {
-                            "redirect_to": redirect_url
+                            "redirectTo": redirect_url
                         }
                     })
                     if debug_mode:
-                        st.success(f"✅ OAuth URL generated using redirect_to (in options)")
-                except (TypeError, KeyError, AttributeError, Exception) as e2:
-                    last_error = e2
-                    # Format 3: redirectTo in options (camelCase) - JS/TS style
-                    try:
-                        res = supabase.auth.sign_in_with_oauth({
-                            "provider": "google",
-                            "options": {
-                                "redirectTo": redirect_url
-                            }
-                        })
-                        if debug_mode:
-                            st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
-                    except (TypeError, KeyError, AttributeError, Exception) as e3:
-                        last_error = e3
-                        raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
+                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
+                except (TypeError, KeyError, AttributeError, Exception) as e3:
+                    last_error = e3
+                    raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
+        
+        if res and hasattr(res, "url"):
+            oauth_url = res.url
+            if debug_mode:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(oauth_url)
+                params = parse_qs(parsed.query)
+                redirect_param = params.get("redirect_to") or params.get("redirectTo")
+                st.info(f"🔍 OAuth URL contains redirect_to: {redirect_param}")
+                st.text(f"Full OAuth URL (first 200 chars): {oauth_url[:200]}...")
             
-            if res and hasattr(res, "url"):
-                oauth_url = res.url
-                if debug_mode:
-                    # Parse and show the redirect URL from the OAuth URL
-                    from urllib.parse import urlparse, parse_qs
-                    parsed = urlparse(oauth_url)
-                    params = parse_qs(parsed.query)
-                    redirect_param = params.get("redirect_to") or params.get("redirectTo")
-                    st.info(f"🔍 OAuth URL contains redirect_to: {redirect_param}")
-                    st.text(f"Full OAuth URL (first 200 chars): {oauth_url[:200]}...")
-                
-                st.markdown(f"[Click here to continue →]({oauth_url})")
-            else:
-                raise Exception("OAuth response missing URL")
-                
-        except Exception as e:
-            st.error(f"Google Sign-in failed: {e}")
-            # Show more details in debug mode
-            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
-                import traceback
-                st.error(f"Debug details: {str(e)}")
-                st.code(traceback.format_exc())
-                st.info(f"Attempted redirect URL: {redirect_url}")
-                st.info(f"Secrets OAUTH_REDIRECT_URL: {st.secrets.get('OAUTH_REDIRECT_URL', 'NOT SET')}")
-    st.markdown("</div>", unsafe_allow_html=True)
+            # Use link_button for direct redirect (no intermediate click)
+            st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
+            st.link_button("Continue with Google", oauth_url, use_container_width=True, type="primary")
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            raise Exception("OAuth response missing URL")
+            
+    except Exception as e:
+        st.error(f"Google Sign-in failed: {e}")
+        if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+            import traceback
+            st.error(f"Debug details: {str(e)}")
+            st.code(traceback.format_exc())
+            st.info(f"Attempted redirect URL: {redirect_url}")
+            st.info(f"Secrets OAUTH_REDIRECT_URL: {st.secrets.get('OAUTH_REDIRECT_URL', 'NOT SET')}")
 
     # ---- Email/Password ----
     st.markdown("<br>", unsafe_allow_html=True)
