@@ -658,6 +658,8 @@ def show_profile():
         st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
     
     # Compact metrics layout: centered stats badge with balanced spacing
+    # Calculate spacing for equal name-to-metrics and metrics-to-refresh spacing
+    spacing_value = "20px"  # Use consistent 20px spacing for visual balance
     st.markdown(f"""
         <style>
         .profile-metrics-container {{
@@ -665,7 +667,7 @@ def show_profile():
             justify-content: center;
             align-items: center;
             gap: 50px;
-            margin: {metrics_top_margin} 0 20px 0;
+            margin: {metrics_top_margin} 0 {spacing_value} 0;
             flex-wrap: wrap;
         }}
         .profile-metric-item {{
@@ -704,24 +706,38 @@ def show_profile():
     """
     st.markdown(metric_html, unsafe_allow_html=True)
     
-    # Refresh button below metrics (perfectly centered)
-    st.markdown("""
+    # Refresh button below metrics (perfectly centered with balanced spacing)
+    # Use same spacing value as metrics bottom margin for visual balance
+    st.markdown(f"""
         <style>
-        .refresh-button-wrapper {
+        .refresh-button-wrapper {{
             display: flex;
             justify-content: center;
             align-items: center;
-            margin: 0;
+            width: 100%;
+            margin: 0 0 0 0;
             padding: 0;
-            margin-top: 0;
-        }
-        .refresh-button-wrapper > div {
+        }}
+        .refresh-button-wrapper > div {{
+            display: flex !important;
+            justify-content: center !important;
             width: auto !important;
-        }
-        /* Ensure consistent spacing between name/metrics and metrics/refresh */
-        .profile-header-section {
-            margin-bottom: 20px;
-        }
+            margin: 0 auto !important;
+        }}
+        .refresh-button-wrapper button {{
+            margin: 0 auto !important;
+        }}
+        /* Responsive: ensure centering on all screen sizes */
+        @media (max-width: 768px) {{
+            .refresh-button-wrapper {{
+                margin: 0 0 0 0;
+            }}
+        }}
+        @media (max-width: 480px) {{
+            .refresh-button-wrapper {{
+                margin: 0 0 0 0;
+            }}
+        }}
         </style>
     """, unsafe_allow_html=True)
     
