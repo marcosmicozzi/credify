@@ -230,8 +230,8 @@ def apply_theme(_: str | None = None):
             width: 100% !important;
         }}
         .add-credits-button-wrapper button:hover {{
-            background-color: #404040 !important;
-            border-color: #404040 !important;
+            background-color: #3D3D3D !important;
+            border-color: #3D3D3D !important;
         }}
         </style>
     """, unsafe_allow_html=True)
