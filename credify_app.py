@@ -657,7 +657,7 @@ def show_profile():
     if user.get("u_bio"):
         st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
     
-    # Compact metrics layout: centered stats badge with balanced spacing
+    # Two-tier metrics layout: buttons (labels) on top, value cards below
     # Calculate spacing for equal name-to-metrics and metrics-to-refresh spacing
     spacing_value = "20px"  # Use consistent 20px spacing for visual balance
     st.markdown(f"""
@@ -665,42 +665,92 @@ def show_profile():
         .profile-metrics-container {{
             display: flex;
             justify-content: center;
-            align-items: center;
-            gap: 50px;
+            align-items: flex-start;
+            gap: 30px;
             margin: {metrics_top_margin} 0 {spacing_value} 0;
             flex-wrap: wrap;
         }}
-        .profile-metric-item {{
+        .profile-metric-column {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            min-width: 100px;
+        }}
+        .profile-metric-button {{
+            background-color: #FFFFFF;
+            color: #111111;
+            border: 1px solid #E0E0E0;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: default;
+            transition: all 0.2s ease-in-out;
+            width: 100%;
             text-align: center;
-            min-width: 60px;
+        }}
+        .profile-metric-button:hover {{
+            background-color: #F4F4F4;
+            border-color: #E0E0E0;
+        }}
+        .profile-metric-card {{
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }}
+        .profile-metric-value {{
+            font-size: 20px;
+            font-weight: 700;
+            color: #111111;
+            margin: 0;
         }}
         @media (max-width: 768px) {{
             .profile-metrics-container {{
-                gap: 30px;
+                gap: 20px;
+            }}
+            .profile-metric-column {{
+                min-width: 80px;
             }}
         }}
         @media (max-width: 480px) {{
             .profile-metrics-container {{
-                gap: 20px;
+                gap: 15px;
+            }}
+            .profile-metric-column {{
+                min-width: 70px;
+            }}
+            .profile-metric-value {{
+                font-size: 18px;
             }}
         }}
         </style>
     """, unsafe_allow_html=True)
     
-    # Metrics displayed in centered compact layout
+    # Two-tier layout: buttons with labels, cards with values
     metric_html = f"""
         <div class="profile-metrics-container">
-            <div class="profile-metric-item">
-                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Views</div>
-                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_view_count']:,}</div>
+            <div class="profile-metric-column">
+                <button class="profile-metric-button">Views</button>
+                <div class="profile-metric-card">
+                    <div class="profile-metric-value">{display_metrics['total_view_count']:,}</div>
+                </div>
             </div>
-            <div class="profile-metric-item">
-                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Likes</div>
-                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_like_count']:,}</div>
+            <div class="profile-metric-column">
+                <button class="profile-metric-button">Likes</button>
+                <div class="profile-metric-card">
+                    <div class="profile-metric-value">{display_metrics['total_like_count']:,}</div>
+                </div>
             </div>
-            <div class="profile-metric-item">
-                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Comments</div>
-                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_comment_count']:,}</div>
+            <div class="profile-metric-column">
+                <button class="profile-metric-button">Comments</button>
+                <div class="profile-metric-card">
+                    <div class="profile-metric-value">{display_metrics['total_comment_count']:,}</div>
+                </div>
             </div>
         </div>
     """
