@@ -226,7 +226,7 @@ def apply_theme(_: str | None = None):
             border: 1px solid #2E2E2E !important;
             border-radius: 8px !important;
             font-weight: 600 !important;
-            transition: all 0.2s ease !important;
+            transition: all 0.2s ease-in-out !important;
             width: 100% !important;
         }}
         .add-credits-button-wrapper button:hover {{
