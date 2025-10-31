@@ -5,6 +5,7 @@ import re
 import requests
 from auth import show_login, logout_button  # logout now handled in topbar menu
 import os
+from datetime import datetime
 
 # -------------------------------
 # INITIAL SETUP
@@ -409,12 +410,15 @@ def render_add_credit_form():
                 "p_thumbnail_url": video_data["p_thumbnail_url"]
             }).execute()
 
-            supabase.table("youtube_metrics").insert({
+            # Upsert to avoid duplicate metrics entries
+            supabase.table("youtube_metrics").upsert({
                 "p_id": video_data["p_id"],
+                "platform": "youtube",
+                "fetched_at": datetime.utcnow().isoformat(),
                 "view_count": video_data["view_count"],
                 "like_count": video_data["like_count"],
                 "comment_count": video_data["comment_count"]
-            }).execute()
+            }, on_conflict=["p_id", "fetched_at"]).execute()
 
             st.success(f"✅ Added new project: {video_data['p_title']}")
 
@@ -430,11 +434,12 @@ def render_add_credit_form():
 
         for role_entry in st.session_state.selected_roles:
             _, role_name = role_entry.split(" - ")
-            supabase.table("user_projects").insert({
+            # Upsert to prevent duplicate role assignments
+            supabase.table("user_projects").upsert({
                 "u_id": u_id,
                 "p_id": video_id,
                 "u_role": role_name
-            }).execute()
+            }, on_conflict=["u_id", "p_id", "u_role"]).execute()
 
         st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
         st.balloons()
