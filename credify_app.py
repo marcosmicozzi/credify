@@ -706,56 +706,23 @@ def show_profile():
     """
     st.markdown(metric_html, unsafe_allow_html=True)
     
-    # Refresh button below metrics (perfectly centered with balanced spacing)
-    # Use same spacing value as metrics bottom margin for visual balance
-    st.markdown(f"""
-        <style>
-        .refresh-button-wrapper {{
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            width: 100%;
-            margin: 0 0 0 0;
-            padding: 0;
-        }}
-        .refresh-button-wrapper > div {{
-            display: flex !important;
-            justify-content: center !important;
-            width: auto !important;
-            margin: 0 auto !important;
-        }}
-        .refresh-button-wrapper button {{
-            margin: 0 auto !important;
-        }}
-        /* Responsive: ensure centering on all screen sizes */
-        @media (max-width: 768px) {{
-            .refresh-button-wrapper {{
-                margin: 0 0 0 0;
-            }}
-        }}
-        @media (max-width: 480px) {{
-            .refresh-button-wrapper {{
-                margin: 0 0 0 0;
-            }}
-        }}
-        </style>
-    """, unsafe_allow_html=True)
-    
+    # Refresh button below metrics (perfectly centered using columns)
     disabled = remaining > 0
     label = "Refresh" if not disabled else f"{remaining}s"
     
-    st.markdown('<div class="refresh-button-wrapper">', unsafe_allow_html=True)
-    if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=False):
-        with st.spinner("Fetching latest metrics from YouTube..."):
-            live_data = fetch_live_metrics_for_user(u_id)
-        if live_data:
-            st.session_state.live_metrics = live_data
-            st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
-            st.success(f"Fetched latest metrics for {len(live_data)} videos")
-            st.rerun()
-        else:
-            st.warning("Could not fetch live metrics right now.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Use columns to center the button perfectly
+    refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 2, 1])
+    with refresh_col2:
+        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
+            with st.spinner("Fetching latest metrics from YouTube..."):
+                live_data = fetch_live_metrics_for_user(u_id)
+            if live_data:
+                st.session_state.live_metrics = live_data
+                st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
+                st.success(f"Fetched latest metrics for {len(live_data)} videos")
+                st.rerun()
+            else:
+                st.warning("Could not fetch live metrics right now.")
 
     st.divider()
 
