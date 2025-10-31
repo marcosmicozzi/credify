@@ -1324,15 +1324,18 @@ def show_analytics_page():
         <div class="analytics-metrics-container">
     """
     
+    button_keys_list = []
     for metric in metric_options:
         is_selected = st.session_state.selected_analytics_metric == metric
         total = metric_totals[metric]
         button_key = f"metric_btn_{metric}"
+        button_keys_list.append(button_key)
         selected_class = " selected" if is_selected else ""
+        data_key = button_key.replace("_", "-")  # Use for data attribute
         
         metric_html += f"""
             <div class="analytics-metric-column">
-                <button class="analytics-metric-button{selected_class}" onclick="document.querySelector('button[key=\\'{button_key}\\']').click()">{metric}</button>
+                <button class="analytics-metric-button{selected_class}" data-metric-key="{button_key}">{metric}</button>
                 <div class="analytics-metric-card">
                     <div class="analytics-metric-value">{total:,}</div>
                 </div>
@@ -1345,28 +1348,31 @@ def show_analytics_page():
     
     st.markdown(metric_html, unsafe_allow_html=True)
     
-    # Invisible buttons for actual click handling
+    # Create hidden Streamlit buttons for actual click handling
+    button_clicked = None
     for metric in metric_options:
         button_key = f"metric_btn_{metric}"
         if st.button("", key=button_key, use_container_width=False):
+            button_clicked = metric
             st.session_state.selected_analytics_metric = metric
             st.rerun()
     
-    # Hide the invisible buttons
-    st.markdown("""
+    # Hide the invisible Streamlit buttons
+    st.markdown(f"""
         <style>
-        button[aria-label=""] {
-            position: absolute;
-            opacity: 0;
-            pointer-events: none;
-            width: 0;
-            height: 0;
-        }
+        button[key^="metric_btn_"] {{
+            position: absolute !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            width: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }}
         </style>
     """, unsafe_allow_html=True)
     
-    # JavaScript to handle button clicks
-    button_keys_js = json.dumps([f"metric_btn_{m}" for m in metric_options])
+    # JavaScript to handle button clicks - trigger Streamlit buttons
+    button_keys_js = json.dumps(button_keys_list)
     st.markdown(f"""
         <script>
         (function() {{
@@ -1374,10 +1380,19 @@ def show_analytics_page():
             const metricButtons = document.querySelectorAll('.analytics-metric-button');
             
             metricButtons.forEach((btn, idx) => {{
-                btn.addEventListener('click', () => {{
-                    const hiddenBtn = document.querySelector('button[key="' + buttonKeys[idx] + '"]');
-                    if (hiddenBtn) {{
-                        hiddenBtn.click();
+                btn.addEventListener('click', function(e) {{
+                    e.preventDefault();
+                    const dataKey = this.getAttribute('data-metric-key');
+                    // Find the corresponding Streamlit button by key attribute
+                    const streamlitBtn = document.querySelector('button[key="' + dataKey + '"]');
+                    if (streamlitBtn) {{
+                        streamlitBtn.click();
+                    }} else {{
+                        // Fallback: try finding by buttonKeys array index
+                        const hiddenBtn = document.querySelector('button[key="' + buttonKeys[idx] + '"]');
+                        if (hiddenBtn) {{
+                            hiddenBtn.click();
+                        }}
                     }}
                 }});
             }});
