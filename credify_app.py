@@ -3,9 +3,12 @@ from supabase import create_client, Client
 import pandas as pd
 import re
 import requests
+import json
+import plotly.graph_objects as go
+import plotly.express as px
 from auth import show_login, logout_button  # logout now handled in topbar menu
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # -------------------------------
 # INITIAL SETUP
@@ -221,6 +224,96 @@ def fetch_youtube_data(video_id):
         "like_count": int(stats.get("likeCount", 0)),
         "comment_count": int(stats.get("commentCount", 0))
     }
+
+# -------------------------------
+# ANALYTICS HELPERS (daily time series)
+# -------------------------------
+@st.cache_data(show_spinner=False)
+def get_user_id_by_email_cached(email: str) -> str | None:
+    res = supabase.table("users").select("u_id").eq("u_email", email).execute()
+    if not res.data:
+        return None
+    return res.data[0]["u_id"]
+
+
+@st.cache_data(show_spinner=False)
+def fetch_user_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: str) -> pd.DataFrame:
+    """Return daily increments (not lifetime) aggregated across all user's videos.
+
+    Works with either data shape in youtube_metrics:
+    - cumulative per-day snapshots (typical API snapshots) → use positive day-over-day diff
+    - daily increments already stored → use values directly
+    """
+    # Fetch project ids for user
+    up_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+    pids = [row["p_id"] for row in (up_resp.data or [])]
+    if not pids:
+        return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
+
+    # Pull snapshots within window for these pids
+    # Note: Supabase range filters are inclusive
+    ym = supabase.table("youtube_metrics") \
+        .select("p_id, fetched_at, view_count, like_count, comment_count") \
+        .in_("p_id", pids) \
+        .gte("fetched_at", start_date_iso) \
+        .lte("fetched_at", end_date_iso) \
+        .execute()
+    rows = ym.data or []
+    if not rows:
+        return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
+
+    df = pd.DataFrame(rows)
+    # Normalize timestamps to date (UTC)
+    df["fetched_at"] = pd.to_datetime(df["fetched_at"], utc=True, errors="coerce")
+    df["date"] = df["fetched_at"].dt.tz_convert("UTC").dt.date
+
+    # Keep last snapshot per video per day
+    df_sorted = df.sort_values(["p_id", "date", "fetched_at"])  # ascending so last per group is last row
+    last_per_day = df_sorted.groupby(["p_id", "date"], as_index=False).tail(1)
+
+    # Compute per-video daily increments; detect whether values are cumulative or already daily
+    last_per_day = last_per_day.sort_values(["p_id", "date"])  # ensure order
+    increments = []
+    for pid, group in last_per_day.groupby("p_id", as_index=False):
+        g = group.copy()
+        for col in ["view_count", "like_count", "comment_count"]:
+            diff = g[col].diff().fillna(0)
+            # Heuristic: if values are mostly non-decreasing across the period, treat as cumulative
+            non_decreasing_ratio = (diff >= 0).mean()
+            if non_decreasing_ratio >= 0.8:
+                vals = diff
+            else:
+                # already daily values
+                vals = g[col]
+            vals = vals.clip(lower=0)
+            g[col + "_inc"] = vals
+        increments.append(g[["p_id", "date", "view_count_inc", "like_count_inc", "comment_count_inc"]])
+    if not increments:
+        return pd.DataFrame(columns=["date", "views", "likes", "comments"]).astype({"date": "datetime64[ns]"})
+    inc_df = pd.concat(increments, ignore_index=True)
+
+    # Aggregate across videos per day — daily increments
+    agg = inc_df.groupby("date", as_index=False).agg({
+        "view_count_inc": "sum",
+        "like_count_inc": "sum",
+        "comment_count_inc": "sum",
+    }).rename(columns={
+        "view_count_inc": "views",
+        "like_count_inc": "likes",
+        "comment_count_inc": "comments",
+    })
+
+    # Ensure full date index for selected range (fill missing days with zeros)
+    start_dt = pd.to_datetime(start_date_iso).date()
+    end_dt = pd.to_datetime(end_date_iso).date()
+    all_days = pd.date_range(start=start_dt, end=end_dt, freq="D").date
+    full = pd.DataFrame({"date": all_days})
+    out = full.merge(agg, on="date", how="left")
+    out = out.fillna({"views": 0, "likes": 0, "comments": 0})
+    out["date"] = pd.to_datetime(out["date"])  # for chart x-axis
+    return out
+
+
 
 # -------------------------------
 # PAGE 1 — PROFILE (replaces Dashboard)
@@ -482,7 +575,277 @@ def show_notifications_page():
 # -------------------------------
 def show_analytics_page():
     st.title("Analytics")
-    st.markdown("<div class='card page-section'><div class='card-title'>YouTube Performance</div><p>Summary of your credited projects.</p></div>", unsafe_allow_html=True)
+    st.caption("Daily totals across all your credited videos (views, likes, comments).")
+
+    # Identify user id
+    user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
+    if not user_res.data:
+        st.info("No user record found. Add a credit to get started.")
+        return
+    u_id = user_res.data[0]["u_id"]
+
+    # Controls: range only (daily metrics)
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months", "Custom"], index=1)
+    with col_b:
+        today = datetime.now(timezone.utc).date()
+        if preset == "Last 7 days":
+            start_date = today - timedelta(days=6)
+            end_date = today
+        elif preset == "Last 28 days":
+            start_date = today - timedelta(days=27)
+            end_date = today
+        elif preset == "Last 12 months":
+            start_date = today - timedelta(days=364)
+            end_date = today
+        else:
+            dates = st.date_input("Custom range", value=(today - timedelta(days=29), today))
+            if isinstance(dates, tuple) and len(dates) == 2:
+                start_date, end_date = dates
+            else:
+                st.warning("Select a start and end date.")
+                return
+
+    # Fetch data
+    start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    end_iso = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    with st.spinner("Loading analytics..."):
+        ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
+        # Fallback: if no rows (e.g., no snapshot today yet), try ending yesterday
+        if ts_df.empty:
+            end_date_fallback = end_date - timedelta(days=1)
+            if end_date_fallback >= start_date:
+                end_iso_fb = datetime.combine(end_date_fallback, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+                ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
+
+    if ts_df.empty:
+        st.info("No metrics yet. Once your AWS job runs, data will appear here.")
+        return
+
+    # Inform when data appears too sparse
+    num_days = (end_date - start_date).days + 1
+    if num_days >= 7 and (ts_df[["views", "likes", "comments"]].sum().sum() == 0):
+        st.warning("We have a limited dataset right now; charts may look flat until more days pass.")
+
+    # Metric definitions
+    metric_options = ["Views", "Likes", "Comments"]
+    metric_map = {
+        "Views": "views",
+        "Likes": "likes",
+        "Comments": "comments",
+    }
+    
+    # Track selected metric in session state
+    if "selected_analytics_metric" not in st.session_state:
+        st.session_state.selected_analytics_metric = "Views"
+    
+    # Calculate totals for all metrics
+    metric_totals = {m: int(ts_df[metric_map[m]].sum()) for m in metric_options}
+    
+    # Row of metric cards (Spotify-style)
+    metric_cols = st.columns(len(metric_options))
+    button_keys = []
+    
+    for idx, metric in enumerate(metric_options):
+        with metric_cols[idx]:
+            is_selected = st.session_state.selected_analytics_metric == metric
+            total = metric_totals[metric]
+            button_key = f"metric_btn_{metric}"
+            button_keys.append(button_key)
+            
+            # Card styling based on selection - lighter palette for readability
+            if is_selected:
+                card_bg = "#E0E0E0"  # Selected: darker grey but readable
+                card_color = "#000000"  # Black text for contrast
+                card_border = "2px solid #000000"
+            else:
+                card_bg = "#F5F5F5"  # Unselected: light grey
+                card_color = "#000000"  # Black text
+                card_border = "1px solid #E0E0E0"
+            
+            # Container with card and button
+            card_id = f"metric_card_{metric.replace(' ', '_')}"
+            st.markdown(f"""
+            <div style="position: relative; margin-bottom: 8px;">
+                <div id="{card_id}" style="
+                    background-color: {card_bg};
+                    color: {card_color};
+                    border: {card_border};
+                    border-radius: 8px;
+                    padding: 16px 12px;
+                    text-align: center;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                    transition: all 0.2s ease;
+                    pointer-events: none;
+                ">
+                    <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px; opacity: 0.9;">
+                        {metric}
+                    </div>
+                    <div style="font-size: 20px; font-weight: 700;">
+                        {total:,}
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Clickable button positioned over card
+            if st.button(
+                "",
+                key=button_key,
+                use_container_width=True,
+            ):
+                st.session_state.selected_analytics_metric = metric
+                st.rerun()
+    
+    # Style all metric buttons to overlay their cards + add hover effects
+    if button_keys:
+        keys_str = ", ".join([f'button[key="{k}"]' for k in button_keys])
+        # Collect unselected card IDs for hover
+        unselected_cards = [
+            f'#metric_card_{m.replace(" ", "_")}' 
+            for m in metric_options 
+            if m != st.session_state.selected_analytics_metric
+        ]
+        unselected_selector = ", ".join(unselected_cards) if unselected_cards else ""
+        
+        hover_css = f"""
+        /* Hover effect for unselected metric cards */
+        {unselected_selector} {{
+            transition: background-color 0.2s ease !important;
+        }}
+        """ if unselected_selector else ""
+        
+        st.markdown(f"""
+        <style>
+        {keys_str} {{
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 80px !important;
+            opacity: 0 !important;
+            cursor: pointer !important;
+            z-index: 10 !important;
+        }}
+        {hover_css}
+        </style>
+        <script>
+        (function() {{
+            const metrics = {json.dumps([m for m in metric_options if m != st.session_state.selected_analytics_metric])};
+            metrics.forEach(metric => {{
+                const metricKey = metric.replace(/ /g, '_');
+                const btn = document.querySelector('button[key="metric_btn_' + metric + '"]');
+                const card = document.getElementById('metric_card_' + metricKey);
+                if (btn && card) {{
+                    btn.addEventListener('mouseenter', () => {{
+                        card.style.backgroundColor = '#EBEBEB';
+                    }});
+                    btn.addEventListener('mouseleave', () => {{
+                        card.style.backgroundColor = '#F5F5F5';
+                    }});
+                }}
+            }});
+        }})();
+        </script>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Get selected metric
+    selected_metric = st.session_state.selected_analytics_metric
+    metric_col = metric_map[selected_metric]
+    metric_sum = metric_totals[selected_metric]
+
+    # Chart: Spotify-style area chart with smooth line
+    chart_df = ts_df.set_index("date")[[metric_col]].rename(columns={metric_col: selected_metric.lower()})
+    
+    # Apply smooth interpolation using rolling average for Spotify-like curves
+    # Use a small window (3 days) to smooth without losing detail
+    smoothed_values = chart_df[selected_metric.lower()].rolling(
+        window=min(3, len(chart_df)), 
+        min_periods=1,
+        center=True
+    ).mean()
+    
+    # Create Plotly area chart
+    fig = go.Figure()
+    
+    # Add filled area trace with smoothed data
+    fig.add_trace(go.Scatter(
+        x=chart_df.index,
+        y=smoothed_values,
+        mode='lines',
+        name=selected_metric,
+        fill='tozeroy',
+        fillcolor='rgba(66,133,244,0.2)',  # Soft translucent blue
+        line=dict(
+            color='rgba(66,133,244,1)',  # Solid blue line
+            width=2.5
+        ),
+        hovertemplate='<b>%{fullData.name}</b><br>' +
+                      '%{x|%b %d, %Y}<br>' +
+                      '%{y:,.0f}<extra></extra>'
+    ))
+    
+    # Update layout for Spotify-style aesthetics
+    fig.update_layout(
+        height=320,
+        showlegend=False,
+        margin=dict(l=0, r=0, t=0, b=0),
+        hovermode='x unified',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)',
+            showline=False,
+            zeroline=False
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.1)',
+            showline=False,
+            zeroline=False
+        ),
+        font=dict(
+            family='-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
+            size=12,
+            color='#111111'
+        )
+    )
+    
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+    # Previous period comparison for selected metric
+    period_days = (end_date - start_date).days + 1
+    prev_end = start_date - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=period_days - 1)
+    prev_start_iso = datetime.combine(prev_start, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    prev_end_iso = datetime.combine(prev_end, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+    prev_df = fetch_user_daily_timeseries(u_id, prev_start_iso, prev_end_iso)
+    prev_sum = int(prev_df[metric_col].sum()) if not prev_df.empty else 0
+    
+    def pct(curr: int, prev: int) -> str:
+        if prev == 0:
+            return "–"
+        return f"{((curr - prev)/prev)*100:.1f}%"
+    
+    delta = metric_sum - prev_sum
+    delta_pct = pct(metric_sum, prev_sum)
+    delta_color = "green" if delta >= 0 else "red"
+    
+    st.caption(
+        f"**{selected_metric}** — Δ vs previous {period_days}d: <span style='color: {delta_color}; font-weight: 600;'>{delta:+,} ({delta_pct})</span>",
+        unsafe_allow_html=True
+    )
+
+    # Peak day for selected metric
+    if not ts_df.empty and ts_df[metric_col].max() > 0:
+        peak_row = ts_df.loc[ts_df[metric_col].idxmax()]
+        peak_date = peak_row["date"].date()
+        peak_value = int(peak_row[metric_col])
+        st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
 
 
 def show_settings_page():
