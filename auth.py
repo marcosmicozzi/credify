@@ -4,6 +4,31 @@ from urllib.parse import urlparse, parse_qs
 import os
 
 # -------------------------------
+# LOGIN BUTTON STYLING
+# -------------------------------
+LOGIN_BUTTON_STYLE = """
+<style>
+/* Unified styling for all login buttons - target both st.button and st.link_button */
+.stButton > button,
+a.stLinkButton,
+.stLinkButton > a {
+  background-color: #2E2E2E !important;
+  color: #FFFFFF !important;
+  border: 1px solid #2E2E2E !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  transition: all 0.2s ease !important;
+}
+.stButton > button:hover,
+a.stLinkButton:hover,
+.stLinkButton > a:hover {
+  background-color: #3A3A3A !important;
+  border-color: #3A3A3A !important;
+}
+</style>
+"""
+
+# -------------------------------
 # SUPABASE CONNECTION (via Streamlit secrets)
 # -------------------------------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -118,6 +143,9 @@ def ensure_user_in_db(user):
 # LOGIN PAGE
 # -------------------------------
 def show_login():
+    # Apply unified button styling
+    st.markdown(LOGIN_BUTTON_STYLE, unsafe_allow_html=True)
+    
     # Centered login header
     st.markdown("""
     <div style="display: flex; flex-direction: column; align-items: center; padding: 60px 20px 40px;">
@@ -130,7 +158,7 @@ def show_login():
     if demo_mode_enabled:
         with st.container():
             st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
-            if st.button("Continue as Demo User", use_container_width=True):
+            if st.button("Continue as Demo User", use_container_width=True, key="demo_button"):
                 class _DemoUser:
                     def __init__(self, email: str):
                         self.email = email
@@ -395,7 +423,7 @@ def show_login():
             
             # Use link_button for direct redirect (no intermediate click)
             st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
-            st.link_button("Continue with Google", oauth_url, use_container_width=True)
+            st.link_button("Continue with Google", oauth_url, use_container_width=True, key="google_button")
             st.markdown("</div>", unsafe_allow_html=True)
         else:
             raise Exception("OAuth response missing URL")
