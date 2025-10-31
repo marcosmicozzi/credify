@@ -25,18 +25,21 @@ def get_redirect_url() -> str:
         The redirect URL for OAuth callbacks (production URL or localhost)
     """
     # 1. Check if explicitly set in secrets (highest priority)
+    # Set this in Streamlit Cloud secrets: OAUTH_REDIRECT_URL = "https://credify-belofupq9c9qxcbwlvfqpl.streamlit.app"
     custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
     if custom_redirect:
         return custom_redirect.rstrip("/")
     
-    # 2. Check Streamlit Cloud environment variables
-    # Streamlit Cloud may set various env vars - check for cloud hosting
-    streamlit_url = os.getenv("STREAMLIT_SHARING_BASE_URL")
+    # 2. Check Streamlit Cloud - try multiple env var patterns
+    streamlit_url = (
+        os.getenv("STREAMLIT_SHARING_BASE_URL") or 
+        os.getenv("STREAMLIT_SERVER_URL") or
+        os.getenv("STREAMLIT_SERVER")
+    )
     if streamlit_url:
         return streamlit_url.rstrip("/")
     
     # 3. Check if we're on Streamlit Cloud by checking for streamlit.app domain
-    # or check HOSTNAME/other cloud indicators
     hostname = os.getenv("HOSTNAME", "")
     if hostname and "streamlit.app" in hostname.lower():
         return f"https://{hostname}".rstrip("/")
@@ -113,25 +116,41 @@ def show_login():
         try:
             redirect_url = get_redirect_url()
             # Supabase OAuth with dynamic redirect URL
-            # Try both snake_case and camelCase formats for compatibility
+            # The redirect_to parameter should be at the top level or in options
+            # Try multiple parameter formats for compatibility
             try:
+                # Format 1: redirect_to at top level
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {
-                        "redirect_to": redirect_url
-                    }
+                    "redirect_to": redirect_url
                 })
             except (TypeError, KeyError, AttributeError):
-                # Fallback: try camelCase format
-                res = supabase.auth.sign_in_with_oauth({
-                    "provider": "google",
-                    "options": {
-                        "redirectTo": redirect_url
-                    }
-                })
+                try:
+                    # Format 2: redirect_to in options (snake_case)
+                    res = supabase.auth.sign_in_with_oauth({
+                        "provider": "google",
+                        "options": {
+                            "redirect_to": redirect_url
+                        }
+                    })
+                except (TypeError, KeyError, AttributeError):
+                    # Format 3: redirectTo in options (camelCase)
+                    res = supabase.auth.sign_in_with_oauth({
+                        "provider": "google",
+                        "options": {
+                            "redirectTo": redirect_url
+                        }
+                    })
             st.markdown(f"[Click here to continue →]({res.url})")
+            # Debug: show redirect URL being used (remove in production if sensitive)
+            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                st.info(f"🔍 Debug: Using redirect URL: {redirect_url}")
         except Exception as e:
             st.error(f"Google Sign-in failed: {e}")
+            # Show more details in debug mode
+            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                st.error(f"Debug details: {str(e)}")
+                st.info(f"Attempted redirect URL: {redirect_url}")
 
     st.markdown("---")
     st.subheader("Or use Email / Password")
