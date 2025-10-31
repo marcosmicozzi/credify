@@ -554,8 +554,6 @@ def fetch_user_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: st
 # PAGE 1 — PROFILE (replaces Dashboard)
 # -------------------------------
 def show_profile():
-    st.title("Profile")
-
     # Get user info
     user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
     if not user_res.data:
@@ -565,15 +563,15 @@ def show_profile():
     user = user_res.data[0]
     u_id = user["u_id"]
 
-    # Profile header spacing retained, label removed per request
+    # Profile header with user's name as main heading
     col1, col2 = st.columns([1, 3])
     with col1:
         st.image(f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}", width=100)
     with col2:
-        st.subheader(user["u_name"])
-        st.write(user["u_email"])
+        # Use the user's name as the page title instead of "Profile"
+        st.markdown(f"<h1 style='margin-bottom: 8px;'>{user['u_name']}</h1>", unsafe_allow_html=True)
         if user.get("u_bio"):
-            st.caption(user["u_bio"])
+            st.markdown(f"<p style='color: #666; margin-top: 8px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
 
     st.divider()
 
@@ -640,14 +638,14 @@ def show_profile():
         col3.metric("Comments", f"{display_metrics['total_comment_count']:,}")
     with header_cols[1]:
         disabled = remaining > 0
-        label = "🔄 Refresh" if not disabled else f"⏳ {remaining}s"
+        label = "Refresh" if not disabled else f"{remaining}s"
         if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
             with st.spinner("Fetching latest metrics from YouTube..."):
                 live_data = fetch_live_metrics_for_user(u_id)
             if live_data:
                 st.session_state.live_metrics = live_data
                 st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
-                st.success(f"✅ Fetched latest metrics for {len(live_data)} videos!")
+                st.success(f"Fetched latest metrics for {len(live_data)} videos")
                 st.rerun()
             else:
                 st.warning("Could not fetch live metrics right now.")
@@ -736,7 +734,7 @@ def show_profile():
         with cols[i % 3]:
             st.markdown("<div class='project-card'>", unsafe_allow_html=True)
             st.image(proj["p_thumbnail_url"], use_container_width=True)
-            st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n🎭 *{roles}*")
+            st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n*{roles}*")
             m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
             st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
             st.markdown("</div>", unsafe_allow_html=True)
@@ -787,18 +785,18 @@ def render_add_credit_form():
 
         video_id = extract_video_id(url_input)
         if not video_id:
-            st.error("❌ Invalid YouTube URL.")
+            st.error("Invalid YouTube URL.")
             st.stop()
 
         # Check if project exists
         existing = supabase.table("projects").select("*").eq("p_id", video_id).execute().data
         if existing:
             project = existing[0]
-            st.info(f"📽 Project already exists: {project['p_title']}")
+            st.info(f"Project already exists: {project['p_title']}")
         else:
             video_data = fetch_youtube_data(video_id)
             if not video_data:
-                st.error("❌ Could not fetch video info from YouTube API.")
+                st.error("Could not fetch video info from YouTube API.")
                 st.stop()
 
             supabase.table("projects").insert({
@@ -825,7 +823,7 @@ def render_add_credit_form():
                     "comment_count": video_data["comment_count"]
                 }).execute()
 
-            st.success(f"✅ Added new project: {video_data['p_title']}")
+            st.success(f"Added new project: {video_data['p_title']}")
 
         # Ensure user exists / update
         supabase.table("users").upsert({
@@ -852,7 +850,7 @@ def render_add_credit_form():
         # Update user metrics after credits are added
         update_user_metrics(u_id)
         
-        st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
+        st.success(f"{name} is now credited for: {', '.join(st.session_state.selected_roles)}")
         st.balloons()
         st.session_state.selected_roles = []
         st.rerun()  # Refresh page to show updated metrics

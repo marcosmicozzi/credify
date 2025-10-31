@@ -118,21 +118,29 @@ def ensure_user_in_db(user):
 # LOGIN PAGE
 # -------------------------------
 def show_login():
-    st.title("🔐 Credify Login")
+    # Centered login header
+    st.markdown("""
+    <div style="display: flex; flex-direction: column; align-items: center; padding: 60px 20px 40px;">
+        <h1 style="font-size: 40px; font-weight: 800; margin-bottom: 8px;">Welcome to Credify</h1>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Optional Demo Mode: allow local testing without real auth
     demo_mode_enabled = str(st.secrets.get("DEMO_MODE", "false")).lower() == "true"
     if demo_mode_enabled:
-        if st.button("Continue as Demo User"):
-            class _DemoUser:
-                def __init__(self, email: str):
-                    self.email = email
+        with st.container():
+            st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
+            if st.button("Continue as Demo User", use_container_width=True):
+                class _DemoUser:
+                    def __init__(self, email: str):
+                        self.email = email
 
-            demo_user = _DemoUser("demo_user@example.com")
-            st.session_state["user"] = demo_user
-            ensure_user_in_db(demo_user)
-            st.success("✅ Running in Demo Mode as demo_user@example.com")
-            st.rerun()
+                demo_user = _DemoUser("demo_user@example.com")
+                st.session_state["user"] = demo_user
+                ensure_user_in_db(demo_user)
+                st.success("✅ Running in Demo Mode as demo_user@example.com")
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # --- Handle OAuth redirect ---
     query_params = st.query_params
@@ -140,7 +148,7 @@ def show_login():
         # Check for OAuth errors first
         if "error" in query_params:
             error_msg = query_params.get("error_description", query_params.get("error", "Unknown OAuth error"))
-            st.error(f"❌ OAuth error: {error_msg}")
+            st.error(f"OAuth error: {error_msg}")
             if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
                 st.code(f"Query params: {dict(query_params)}")
             return
@@ -148,7 +156,7 @@ def show_login():
         # Handle successful OAuth callback
         code = query_params.get("code")
         if not code:
-            st.error("❌ No authorization code received from OAuth provider.")
+            st.error("No authorization code received from OAuth provider.")
             return
             
         try:
@@ -325,8 +333,9 @@ def show_login():
                 st.info(f"Supabase Key present: {'Yes' if SUPABASE_KEY else 'No'}")
         return
 
-    # --- Google Sign-In Button ---
-    if st.button("Continue with Google"):
+    # --- Google Sign-In Button --- (centered)
+    st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
+    if st.button("Continue with Google", use_container_width=True, key="google_auth"):
         try:
             redirect_url = get_redirect_url()
             debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
@@ -402,40 +411,42 @@ def show_login():
                 st.code(traceback.format_exc())
                 st.info(f"Attempted redirect URL: {redirect_url}")
                 st.info(f"Secrets OAUTH_REDIRECT_URL: {st.secrets.get('OAUTH_REDIRECT_URL', 'NOT SET')}")
-
-    st.markdown("---")
-    st.subheader("Or use Email / Password")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # ---- Email/Password ----
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
+    st.markdown("<br>", unsafe_allow_html=True)
+    email_col1, email_col2, email_col3 = st.columns([1, 2, 1])
+    with email_col2:
+        st.markdown("<p style='text-align: center; color: #666; margin-bottom: 20px;'>Or use Email / Password</p>", unsafe_allow_html=True)
+        email = st.text_input("Email", key="email_input")
+        password = st.text_input("Password", type="password", key="password_input")
+        
+        sign_cols = st.columns(2)
+        with sign_cols[0]:
+            if st.button("Sign In", use_container_width=True, key="sign_in"):
+                try:
+                    user = supabase.auth.sign_in_with_password(
+                        {"email": email, "password": password}
+                    )
+                    if user and user.user:
+                        st.session_state["user"] = user.user
+                        ensure_user_in_db(user.user)
+                        st.success(f"Welcome, {user.user.email}!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials.")
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Sign In"):
-            try:
-                user = supabase.auth.sign_in_with_password(
-                    {"email": email, "password": password}
-                )
-                if user and user.user:
-                    st.session_state["user"] = user.user
-                    ensure_user_in_db(user.user)
-                    st.success(f"Welcome, {user.user.email}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials.")
-            except Exception as e:
-                st.error(f"Login failed: {e}")
-
-    with col2:
-        if st.button("Sign Up"):
-            try:
-                user = supabase.auth.sign_up(
-                    {"email": email, "password": password}
-                )
-                st.success("✅ Account created! Check your email to verify.")
-            except Exception as e:
-                st.error(f"Sign-up failed: {e}")
+        with sign_cols[1]:
+            if st.button("Sign Up", use_container_width=True, key="sign_up"):
+                try:
+                    user = supabase.auth.sign_up(
+                        {"email": email, "password": password}
+                    )
+                    st.success("✅ Account created! Check your email to verify.")
+                except Exception as e:
+                    st.error(f"Sign-up failed: {e}")
 
 
 # -------------------------------
