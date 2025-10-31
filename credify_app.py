@@ -233,12 +233,12 @@ def apply_theme(_: str | None = None):
             background-color: #F2F2F2 !important;
             border-color: #E0E0E0 !important;
         }}
-        /* Refresh button in Profile section */
-        .refresh-button-wrapper button {{
+        /* Refresh button in Profile section - matches sidebar color on hover */
+        .profile-refresh-section .stButton > button {{
             transition: all 0.2s ease-in-out !important;
         }}
-        .refresh-button-wrapper button:hover {{
-            background-color: #F2F2F2 !important;
+        .profile-refresh-section .stButton > button:hover {{
+            background-color: #F4F4F4 !important;
         }}
         </style>
     """, unsafe_allow_html=True)
@@ -710,6 +710,8 @@ def show_profile():
     disabled = remaining > 0
     label = "Refresh" if not disabled else f"{remaining}s"
     
+    # Wrap in a container for styling
+    st.markdown('<div class="profile-refresh-section">', unsafe_allow_html=True)
     # Use columns to center the button perfectly
     refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 2, 1])
     with refresh_col2:
@@ -723,6 +725,7 @@ def show_profile():
                 st.rerun()
             else:
                 st.warning("Could not fetch live metrics right now.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
 
