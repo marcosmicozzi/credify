@@ -657,7 +657,7 @@ def show_profile():
     if user.get("u_bio"):
         st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
     
-    # Two-tier metrics layout: buttons (labels) on top, value cards below
+    # Compact metrics layout: centered stats badge with balanced spacing
     # Calculate spacing for equal name-to-metrics and metrics-to-refresh spacing
     spacing_value = "20px"  # Use consistent 20px spacing for visual balance
     st.markdown(f"""
@@ -665,92 +665,42 @@ def show_profile():
         .profile-metrics-container {{
             display: flex;
             justify-content: center;
-            align-items: flex-start;
-            gap: 30px;
+            align-items: center;
+            gap: 50px;
             margin: {metrics_top_margin} 0 {spacing_value} 0;
             flex-wrap: wrap;
         }}
-        .profile-metric-column {{
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            min-width: 100px;
-        }}
-        .profile-metric-button {{
-            background-color: #FFFFFF;
-            color: #111111;
-            border: 1px solid #E0E0E0;
-            border-radius: 8px;
-            padding: 8px 16px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: default;
-            transition: all 0.2s ease-in-out;
-            width: 100%;
+        .profile-metric-item {{
             text-align: center;
-        }}
-        .profile-metric-button:hover {{
-            background-color: #F4F4F4;
-            border-color: #E0E0E0;
-        }}
-        .profile-metric-card {{
-            background-color: #FFFFFF;
-            border: 1px solid #E0E0E0;
-            border-radius: 8px;
-            padding: 12px 16px;
-            width: 100%;
-            text-align: center;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }}
-        .profile-metric-value {{
-            font-size: 20px;
-            font-weight: 700;
-            color: #111111;
-            margin: 0;
+            min-width: 60px;
         }}
         @media (max-width: 768px) {{
             .profile-metrics-container {{
-                gap: 20px;
-            }}
-            .profile-metric-column {{
-                min-width: 80px;
+                gap: 30px;
             }}
         }}
         @media (max-width: 480px) {{
             .profile-metrics-container {{
-                gap: 15px;
-            }}
-            .profile-metric-column {{
-                min-width: 70px;
-            }}
-            .profile-metric-value {{
-                font-size: 18px;
+                gap: 20px;
             }}
         }}
         </style>
     """, unsafe_allow_html=True)
     
-    # Two-tier layout: buttons with labels, cards with values
+    # Metrics displayed in centered compact layout
     metric_html = f"""
         <div class="profile-metrics-container">
-            <div class="profile-metric-column">
-                <button class="profile-metric-button">Views</button>
-                <div class="profile-metric-card">
-                    <div class="profile-metric-value">{display_metrics['total_view_count']:,}</div>
-                </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Views</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_view_count']:,}</div>
             </div>
-            <div class="profile-metric-column">
-                <button class="profile-metric-button">Likes</button>
-                <div class="profile-metric-card">
-                    <div class="profile-metric-value">{display_metrics['total_like_count']:,}</div>
-                </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Likes</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_like_count']:,}</div>
             </div>
-            <div class="profile-metric-column">
-                <button class="profile-metric-button">Comments</button>
-                <div class="profile-metric-card">
-                    <div class="profile-metric-value">{display_metrics['total_comment_count']:,}</div>
-                </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Comments</div>
+                <div style="font-size: 20px; font-weight: 700;">{display_metrics['total_comment_count']:,}</div>
             </div>
         </div>
     """
@@ -1292,112 +1242,148 @@ def show_analytics_page():
     # Calculate totals for all metrics
     metric_totals = {m: int(ts_df[metric_map[m]].sum()) for m in metric_options}
     
-    # Row of metric cards (Spotify-style)
-    metric_cols = st.columns(len(metric_options))
-    button_keys = []
+    # Two-tier layout: buttons (labels) on top, value cards below
+    st.markdown("""
+        <style>
+        .analytics-metrics-container {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 30px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        .analytics-metric-column {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            min-width: 120px;
+        }
+        .analytics-metric-button {
+            background-color: #FFFFFF;
+            color: #111111;
+            border: 1px solid #E0E0E0;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            width: 100%;
+            text-align: center;
+        }
+        .analytics-metric-button:hover {
+            background-color: #F4F4F4;
+            border-color: #E0E0E0;
+        }
+        .analytics-metric-button.selected {
+            background-color: #E0E0E0;
+            border: 2px solid #000000;
+            font-weight: 700;
+        }
+        .analytics-metric-card {
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            border-radius: 8px;
+            padding: 16px 20px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .analytics-metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #111111;
+            margin: 0;
+        }
+        @media (max-width: 768px) {
+            .analytics-metrics-container {
+                gap: 20px;
+            }
+            .analytics-metric-column {
+                min-width: 100px;
+            }
+        }
+        @media (max-width: 480px) {
+            .analytics-metrics-container {
+                gap: 15px;
+            }
+            .analytics-metric-column {
+                min-width: 80px;
+            }
+            .analytics-metric-value {
+                font-size: 20px;
+            }
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
-    for idx, metric in enumerate(metric_options):
-        with metric_cols[idx]:
-            is_selected = st.session_state.selected_analytics_metric == metric
-            total = metric_totals[metric]
-            button_key = f"metric_btn_{metric}"
-            button_keys.append(button_key)
-            
-            # Card styling based on selection - lighter palette for readability
-            if is_selected:
-                card_bg = "#E0E0E0"  # Selected: darker grey but readable
-                card_color = "#000000"  # Black text for contrast
-                card_border = "2px solid #000000"
-            else:
-                card_bg = "#F5F5F5"  # Unselected: light grey
-                card_color = "#000000"  # Black text
-                card_border = "1px solid #E0E0E0"
-            
-            # Container with card and button
-            card_id = f"metric_card_{metric.replace(' ', '_')}"
-            st.markdown(f"""
-            <div style="position: relative; margin-bottom: 8px;">
-                <div id="{card_id}" style="
-                    background-color: {card_bg};
-                    color: {card_color};
-                    border: {card_border};
-                    border-radius: 8px;
-                    padding: 16px 12px;
-                    text-align: center;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                    transition: all 0.2s ease;
-                    pointer-events: none;
-                ">
-                    <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px; opacity: 0.9;">
-                        {metric}
-                    </div>
-                    <div style="font-size: 20px; font-weight: 700;">
-                        {total:,}
-                    </div>
+    # Create two-tier layout with buttons and cards
+    metric_html = f"""
+        <div class="analytics-metrics-container">
+    """
+    
+    for metric in metric_options:
+        is_selected = st.session_state.selected_analytics_metric == metric
+        total = metric_totals[metric]
+        button_key = f"metric_btn_{metric}"
+        selected_class = " selected" if is_selected else ""
+        
+        metric_html += f"""
+            <div class="analytics-metric-column">
+                <button class="analytics-metric-button{selected_class}" onclick="document.querySelector('button[key=\\'{button_key}\\']').click()">{metric}</button>
+                <div class="analytics-metric-card">
+                    <div class="analytics-metric-value">{total:,}</div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-            
-            # Clickable button positioned over card
-            if st.button(
-                "",
-                key=button_key,
-                use_container_width=True,
-            ):
-                st.session_state.selected_analytics_metric = metric
-                st.rerun()
+        """
     
-    # Style all metric buttons to overlay their cards + add hover effects
-    if button_keys:
-        keys_str = ", ".join([f'button[key="{k}"]' for k in button_keys])
-        # Collect unselected card IDs for hover
-        unselected_cards = [
-            f'#metric_card_{m.replace(" ", "_")}' 
-            for m in metric_options 
-            if m != st.session_state.selected_analytics_metric
-        ]
-        unselected_selector = ", ".join(unselected_cards) if unselected_cards else ""
-        
-        hover_css = f"""
-        /* Hover effect for unselected metric cards */
-        {unselected_selector} {{
-            transition: background-color 0.2s ease !important;
-        }}
-        """ if unselected_selector else ""
-        
-        st.markdown(f"""
+    metric_html += """
+        </div>
+    """
+    
+    st.markdown(metric_html, unsafe_allow_html=True)
+    
+    # Invisible buttons for actual click handling
+    for metric in metric_options:
+        button_key = f"metric_btn_{metric}"
+        if st.button("", key=button_key, use_container_width=False):
+            st.session_state.selected_analytics_metric = metric
+            st.rerun()
+    
+    # Hide the invisible buttons
+    st.markdown("""
         <style>
-        {keys_str} {{
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
-            height: 80px !important;
-            opacity: 0 !important;
-            cursor: pointer !important;
-            z-index: 10 !important;
-        }}
-        {hover_css}
+        button[aria-label=""] {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+            width: 0;
+            height: 0;
+        }
         </style>
+    """, unsafe_allow_html=True)
+    
+    # JavaScript to handle button clicks
+    button_keys_js = json.dumps([f"metric_btn_{m}" for m in metric_options])
+    st.markdown(f"""
         <script>
         (function() {{
-            const metrics = {json.dumps([m for m in metric_options if m != st.session_state.selected_analytics_metric])};
-            metrics.forEach(metric => {{
-                const metricKey = metric.replace(/ /g, '_');
-                const btn = document.querySelector('button[key="metric_btn_' + metric + '"]');
-                const card = document.getElementById('metric_card_' + metricKey);
-                if (btn && card) {{
-                    btn.addEventListener('mouseenter', () => {{
-                        card.style.backgroundColor = '#EBEBEB';
-                    }});
-                    btn.addEventListener('mouseleave', () => {{
-                        card.style.backgroundColor = '#F5F5F5';
-                    }});
-                }}
+            const buttonKeys = {button_keys_js};
+            const metricButtons = document.querySelectorAll('.analytics-metric-button');
+            
+            metricButtons.forEach((btn, idx) => {{
+                btn.addEventListener('click', () => {{
+                    const hiddenBtn = document.querySelector('button[key="' + buttonKeys[idx] + '"]');
+                    if (hiddenBtn) {{
+                        hiddenBtn.click();
+                    }}
+                }});
             }});
         }})();
         </script>
-        """, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
     
     st.markdown("<br>", unsafe_allow_html=True)
     
