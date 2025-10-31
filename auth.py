@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 from urllib.parse import urlparse, parse_qs
+import os
 
 # -------------------------------
 # SUPABASE CONNECTION (via Streamlit secrets)
@@ -13,6 +14,41 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# -------------------------------
+# REDIRECT URL HELPER
+# -------------------------------
+def get_redirect_url() -> str:
+    """Dynamically determines the OAuth redirect URL based on the environment.
+    
+    Returns:
+        The redirect URL for OAuth callbacks (production URL or localhost)
+    """
+    # 1. Check if explicitly set in secrets (highest priority)
+    custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
+    if custom_redirect:
+        return custom_redirect.rstrip("/")
+    
+    # 2. Check Streamlit Cloud environment variables
+    # Streamlit Cloud may set various env vars - check for cloud hosting
+    streamlit_url = os.getenv("STREAMLIT_SHARING_BASE_URL")
+    if streamlit_url:
+        return streamlit_url.rstrip("/")
+    
+    # 3. Check if we're on Streamlit Cloud by checking for streamlit.app domain
+    # or check HOSTNAME/other cloud indicators
+    hostname = os.getenv("HOSTNAME", "")
+    if hostname and "streamlit.app" in hostname.lower():
+        return f"https://{hostname}".rstrip("/")
+    
+    # 4. Check for explicit production URL in environment
+    prod_url = os.getenv("PRODUCTION_URL") or os.getenv("BASE_URL")
+    if prod_url:
+        return prod_url.rstrip("/")
+    
+    # 5. Default: localhost for local development
+    return "http://localhost:8501"
+
 
 # -------------------------------
 # USER SYNC HELPER
@@ -75,7 +111,24 @@ def show_login():
     # --- Google Sign-In Button ---
     if st.button("Continue with Google"):
         try:
-            res = supabase.auth.sign_in_with_oauth({"provider": "google"})
+            redirect_url = get_redirect_url()
+            # Supabase OAuth with dynamic redirect URL
+            # Try both snake_case and camelCase formats for compatibility
+            try:
+                res = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {
+                        "redirect_to": redirect_url
+                    }
+                })
+            except (TypeError, KeyError, AttributeError):
+                # Fallback: try camelCase format
+                res = supabase.auth.sign_in_with_oauth({
+                    "provider": "google",
+                    "options": {
+                        "redirectTo": redirect_url
+                    }
+                })
             st.markdown(f"[Click here to continue →]({res.url})")
         except Exception as e:
             st.error(f"Google Sign-in failed: {e}")
