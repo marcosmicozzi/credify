@@ -6,7 +6,7 @@ import requests
 import json
 import plotly.graph_objects as go
 import plotly.express as px
-from auth import show_login, logout_button  # logout now handled in topbar menu
+from auth import show_login, logout_button, supabase as auth_supabase  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 import os
 from datetime import datetime, timedelta, timezone
@@ -54,6 +54,7 @@ button[data-testid="stBaseButton-secondary"]:hover {
 # -------------------------------
 # SUPABASE CLIENT (via Streamlit secrets)
 # -------------------------------
+# Use the shared Supabase client from auth.py to ensure PKCE state consistency
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
 YOUTUBE_API_KEY = st.secrets.get("YOUTUBE_API_KEY")
@@ -66,7 +67,8 @@ if not YOUTUBE_API_KEY:
     st.error("Missing YOUTUBE_API_KEY in .streamlit/secrets.toml")
     st.stop()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Use the same Supabase client instance as auth.py to maintain PKCE state
+supabase: Client = auth_supabase
 
 # -------------------------------
 # AUTHENTICATION GATE

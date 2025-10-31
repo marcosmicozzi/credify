@@ -38,7 +38,12 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .streamlit/secrets.toml")
     st.stop()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Create a single shared Supabase client instance
+# Store in session state to persist across reruns during OAuth flow
+if "supabase_client" not in st.session_state:
+    st.session_state.supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase: Client = st.session_state.supabase_client
 
 # -------------------------------
 # REDIRECT URL HELPER
@@ -329,6 +334,9 @@ def show_login():
                 
                 ensure_user_in_db(user)
                 st.success(f"✅ Logged in as {user.email}")
+                
+                # Clear OAuth query params to prevent re-processing
+                st.query_params.clear()
                 st.rerun()
             else:
                 # Detailed error reporting
@@ -350,15 +358,26 @@ def show_login():
                     st.code(f"Response repr: {repr(res)}")
         except Exception as e:
             error_msg = str(e)
-            st.error(f"Error during OAuth session exchange: {error_msg}")
-            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
-                import traceback
-                st.error("Full error traceback:")
-                st.code(traceback.format_exc())
-                st.info(f"Code received: {code[:50] if code else 'None'}...")
-                st.info(f"Redirect URL used: {redirect_url}")
-                st.info(f"Supabase URL: {SUPABASE_URL}")
-                st.info(f"Supabase Key present: {'Yes' if SUPABASE_KEY else 'No'}")
+            # Check if it's a PKCE mismatch error
+            if "code challenge" in error_msg.lower() or "code verifier" in error_msg.lower():
+                st.error("OAuth session expired or invalid. Please try logging in again.")
+                # Clear query params and any stale auth state
+                st.query_params.clear()
+                # Optionally clear the client to force a fresh PKCE state
+                if "supabase_client" in st.session_state:
+                    del st.session_state.supabase_client
+                if st.button("Try Again", key="retry_oauth"):
+                    st.rerun()
+            else:
+                st.error(f"Error during OAuth session exchange: {error_msg}")
+                if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                    import traceback
+                    st.error("Full error traceback:")
+                    st.code(traceback.format_exc())
+                    st.info(f"Code received: {code[:50] if code else 'None'}...")
+                    st.info(f"Redirect URL used: {redirect_url}")
+                    st.info(f"Supabase URL: {SUPABASE_URL}")
+                    st.info(f"Supabase Key present: {'Yes' if SUPABASE_KEY else 'No'}")
         return
 
     # --- Google Sign-In Button --- (centered)
