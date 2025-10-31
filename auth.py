@@ -24,32 +24,73 @@ def get_redirect_url() -> str:
     Returns:
         The redirect URL for OAuth callbacks (production URL or localhost)
     """
+    debug_mode = str(st.secrets.get("DEBUG_REDIRECT", "false")).lower() == "true"
+    detected_source = None
+    
     # 1. Check if explicitly set in secrets (highest priority)
     # Set this in Streamlit Cloud secrets: OAUTH_REDIRECT_URL = "https://credify-belofupq9c9qxcbwlvfqpl.streamlit.app"
-    custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
-    if custom_redirect:
-        return custom_redirect.rstrip("/")
+    try:
+        # Try multiple ways to access the secret (handles different Streamlit versions)
+        custom_redirect = None
+        try:
+            custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
+        except (AttributeError, KeyError):
+            try:
+                custom_redirect = st.secrets["OAUTH_REDIRECT_URL"]
+            except (KeyError, AttributeError):
+                pass
+        
+        if custom_redirect and str(custom_redirect).strip():
+            custom_redirect = str(custom_redirect).strip().rstrip("/")
+            if debug_mode:
+                st.sidebar.success(f"✅ Redirect URL from secrets: {custom_redirect}")
+            return custom_redirect
+        elif debug_mode:
+            st.sidebar.info("ℹ️ OAUTH_REDIRECT_URL not found in secrets")
+    except Exception as e:
+        if debug_mode:
+            st.sidebar.warning(f"⚠️ Error reading OAUTH_REDIRECT_URL from secrets: {e}")
     
     # 2. Check Streamlit Cloud - try multiple env var patterns
     streamlit_url = (
         os.getenv("STREAMLIT_SHARING_BASE_URL") or 
         os.getenv("STREAMLIT_SERVER_URL") or
-        os.getenv("STREAMLIT_SERVER")
+        os.getenv("STREAMLIT_SERVER") or
+        os.getenv("STREAMLIT_CLOUD_BASE_URL")
     )
     if streamlit_url:
+        detected_source = "environment variable"
+        if debug_mode:
+            st.sidebar.info(f"🔍 Redirect URL from env var: {streamlit_url}")
         return streamlit_url.rstrip("/")
     
     # 3. Check if we're on Streamlit Cloud by checking for streamlit.app domain
     hostname = os.getenv("HOSTNAME", "")
     if hostname and "streamlit.app" in hostname.lower():
-        return f"https://{hostname}".rstrip("/")
+        detected_source = "HOSTNAME env var"
+        url = f"https://{hostname}".rstrip("/")
+        if debug_mode:
+            st.sidebar.info(f"🔍 Redirect URL from HOSTNAME: {url}")
+        return url
     
     # 4. Check for explicit production URL in environment
     prod_url = os.getenv("PRODUCTION_URL") or os.getenv("BASE_URL")
     if prod_url:
+        detected_source = "PRODUCTION_URL env var"
+        if debug_mode:
+            st.sidebar.info(f"🔍 Redirect URL from PRODUCTION_URL: {prod_url}")
         return prod_url.rstrip("/")
     
-    # 5. Default: localhost for local development
+    # 5. Debug: Show what we found
+    if debug_mode:
+        st.sidebar.warning("🔍 Debug Info:")
+        st.sidebar.write(f"- OAUTH_REDIRECT_URL in secrets: {custom_redirect}")
+        st.sidebar.write(f"- STREAMLIT_SHARING_BASE_URL: {os.getenv('STREAMLIT_SHARING_BASE_URL')}")
+        st.sidebar.write(f"- HOSTNAME: {hostname}")
+        st.sidebar.write(f"- All env vars with 'STREAMLIT': {[k for k in os.environ.keys() if 'STREAMLIT' in k]}")
+        st.sidebar.write(f"- Falling back to: localhost:8501")
+    
+    # 6. Default: localhost for local development
     return "http://localhost:8501"
 
 
@@ -95,62 +136,272 @@ def show_login():
 
     # --- Handle OAuth redirect ---
     query_params = st.query_params
-    if "code" in query_params:
-        code = query_params["code"]
+    if "code" in query_params or "error" in query_params:
+        # Check for OAuth errors first
+        if "error" in query_params:
+            error_msg = query_params.get("error_description", query_params.get("error", "Unknown OAuth error"))
+            st.error(f"❌ OAuth error: {error_msg}")
+            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                st.code(f"Query params: {dict(query_params)}")
+            return
+        
+        # Handle successful OAuth callback
+        code = query_params.get("code")
+        if not code:
+            st.error("❌ No authorization code received from OAuth provider.")
+            return
+            
         try:
-            # ✅ FIX: Supabase v2.22+ expects a dict, not a string
-            res = supabase.auth.exchange_code_for_session({"auth_code": code})
-            if res and hasattr(res, "user") and res.user:
-                st.session_state["user"] = res.user
-                ensure_user_in_db(res.user)
-                st.success(f"✅ Logged in as {res.user.email}")
+            # Get the current redirect URL to match what was sent
+            redirect_url = get_redirect_url()
+            debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
+            
+            if debug_mode:
+                st.info(f"🔍 Exchanging code for session...")
+                st.caption(f"Redirect URL: {redirect_url}")
+                st.caption(f"Code length: {len(code) if code else 0} chars")
+            
+            # Exchange code for session
+            # Supabase v2.22+ expects a dict with auth_code
+            exchange_params = {
+                "auth_code": code
+            }
+            
+            # Try the exchange
+            res = None
+            exchange_error = None
+            
+            try:
+                res = supabase.auth.exchange_code_for_session(exchange_params)
+                if debug_mode:
+                    st.success(f"✅ Exchange call succeeded")
+            except Exception as e1:
+                exchange_error = e1
+                # Some Supabase versions may need the redirect URL in the exchange call
+                if debug_mode:
+                    st.warning(f"⚠️ First exchange attempt failed: {e1}")
+                
+                # Try with redirect_to parameter
+                try:
+                    exchange_params["redirect_to"] = redirect_url
+                    res = supabase.auth.exchange_code_for_session(exchange_params)
+                    if debug_mode:
+                        st.success(f"✅ Exchange succeeded with redirect_to")
+                except Exception as e2:
+                    if debug_mode:
+                        st.error(f"❌ Second exchange attempt also failed: {e2}")
+                    raise e2
+            
+            # Handle different response formats
+            user = None
+            session = None
+            
+            # Check various possible response structures
+            if res:
+                # Format 1: res.user (common in auth responses)
+                if hasattr(res, "user") and res.user:
+                    user = res.user
+                    session = res
+                    if debug_mode:
+                        st.info(f"✅ Found user via res.user: {user.email if hasattr(user, 'email') else 'no email attr'}")
+                
+                # Format 2: res is a Session object with .user attribute
+                elif hasattr(res, "session") and hasattr(res, "user"):
+                    user = res.user
+                    session = res.session
+                    if debug_mode:
+                        st.info(f"✅ Found user via res.session/res.user")
+                
+                # Format 3: Response is dict-like
+                elif isinstance(res, dict):
+                    user = res.get("user")
+                    session = res.get("session")
+                    if debug_mode:
+                        st.info(f"✅ Found user in dict response")
+                
+                # Format 4: Check if res has session attribute with user
+                elif hasattr(res, "session"):
+                    sess = res.session
+                    if hasattr(sess, "user"):
+                        user = sess.user
+                        session = sess
+                    elif isinstance(sess, dict) and "user" in sess:
+                        user = sess["user"]
+                        session = sess
+                
+                # Format 5: Check for data attribute (some responses wrap in .data)
+                if not user and hasattr(res, "data"):
+                    data = res.data
+                    if isinstance(data, dict):
+                        user = data.get("user")
+                        session = data.get("session")
+                    elif hasattr(data, "user"):
+                        user = data.user
+                        session = getattr(data, "session", None)
+                
+                # Format 6: Direct Session object (user might be accessible differently)
+                # After exchange_code_for_session, the client should have the session set
+                # So we can call get_user() to retrieve the user
+                if not user and hasattr(res, "access_token"):
+                    # This might be a Session object - exchange_code_for_session sets session on client
+                    if debug_mode:
+                        st.info(f"🔍 Response appears to be a Session object, fetching user from client...")
+                    try:
+                        # Get current user from the session that was just set
+                        user_response = supabase.auth.get_user()
+                        if user_response:
+                            # Handle different response formats from get_user()
+                            if hasattr(user_response, "user"):
+                                user = user_response.user
+                            elif isinstance(user_response, dict) and "user" in user_response:
+                                user = user_response["user"]
+                            else:
+                                user = user_response  # Might be the user object directly
+                            session = res  # Use the session from exchange
+                            if debug_mode:
+                                st.success(f"✅ Retrieved user via get_user()")
+                    except Exception as e3:
+                        if debug_mode:
+                            st.warning(f"⚠️ Could not fetch user from session: {e3}")
+                
+                # Format 7: Final fallback - if exchange succeeded but we don't have user yet,
+                # try get_user() since the session should now be set on the client
+                if not user:
+                    if debug_mode:
+                        st.info(f"🔍 Trying final fallback: get_user() after exchange...")
+                    try:
+                        user_response = supabase.auth.get_user()
+                        if user_response:
+                            if hasattr(user_response, "user"):
+                                user = user_response.user
+                            elif isinstance(user_response, dict) and "user" in user_response:
+                                user = user_response["user"]
+                            else:
+                                user = user_response
+                            session = res
+                            if debug_mode:
+                                st.success(f"✅ Retrieved user via get_user() fallback")
+                    except Exception as e4:
+                        if debug_mode:
+                            st.warning(f"⚠️ Final fallback also failed: {e4}")
+            
+            if user:
+                st.session_state["user"] = user
+                # Store session if we have it
+                if session:
+                    st.session_state["session"] = session
+                
+                ensure_user_in_db(user)
+                st.success(f"✅ Logged in as {user.email}")
                 st.rerun()
             else:
-                st.error("❌ Failed to exchange session code.")
+                # Detailed error reporting
+                error_details = []
+                if not res:
+                    error_details.append("Response is None")
+                else:
+                    error_details.append(f"Response type: {type(res)}")
+                    error_details.append(f"Response attributes: {dir(res)}")
+                    if hasattr(res, "__dict__"):
+                        error_details.append(f"Response dict keys: {list(res.__dict__.keys())}")
+                
+                st.error("❌ Failed to exchange session code - no user found in response.")
+                if debug_mode:
+                    st.error("Debug Details:")
+                    for detail in error_details:
+                        st.write(f"- {detail}")
+                    st.code(f"Response object: {res}")
+                    st.code(f"Response repr: {repr(res)}")
         except Exception as e:
-            st.error(f"Error during OAuth session exchange: {e}")
+            error_msg = str(e)
+            st.error(f"Error during OAuth session exchange: {error_msg}")
+            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                import traceback
+                st.error("Full error traceback:")
+                st.code(traceback.format_exc())
+                st.info(f"Code received: {code[:50] if code else 'None'}...")
+                st.info(f"Redirect URL used: {redirect_url}")
+                st.info(f"Supabase URL: {SUPABASE_URL}")
+                st.info(f"Supabase Key present: {'Yes' if SUPABASE_KEY else 'No'}")
         return
 
     # --- Google Sign-In Button ---
     if st.button("Continue with Google"):
         try:
             redirect_url = get_redirect_url()
+            debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
+            
+            if debug_mode:
+                st.info(f"🔍 Preparing OAuth with redirect URL: {redirect_url}")
+                # Show the actual OAuth URL that will be generated
+                st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
+            
             # Supabase OAuth with dynamic redirect URL
-            # The redirect_to parameter should be at the top level or in options
-            # Try multiple parameter formats for compatibility
+            # Based on supabase-py documentation, redirect_to should be a top-level parameter
+            # Try multiple formats to ensure compatibility across versions
+            res = None
+            last_error = None
+            
+            # Format 1: redirect_to as top-level parameter (most likely correct format)
             try:
-                # Format 1: redirect_to at top level
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
                     "redirect_to": redirect_url
                 })
-            except (TypeError, KeyError, AttributeError):
+                if debug_mode:
+                    st.success(f"✅ OAuth URL generated using redirect_to (top level)")
+            except (TypeError, KeyError, AttributeError, Exception) as e1:
+                last_error = e1
+                # Format 2: redirect_to in options (snake_case) - some versions use this
                 try:
-                    # Format 2: redirect_to in options (snake_case)
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
                         "options": {
                             "redirect_to": redirect_url
                         }
                     })
-                except (TypeError, KeyError, AttributeError):
-                    # Format 3: redirectTo in options (camelCase)
-                    res = supabase.auth.sign_in_with_oauth({
-                        "provider": "google",
-                        "options": {
-                            "redirectTo": redirect_url
-                        }
-                    })
-            st.markdown(f"[Click here to continue →]({res.url})")
-            # Debug: show redirect URL being used (remove in production if sensitive)
-            if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
-                st.info(f"🔍 Debug: Using redirect URL: {redirect_url}")
+                    if debug_mode:
+                        st.success(f"✅ OAuth URL generated using redirect_to (in options)")
+                except (TypeError, KeyError, AttributeError, Exception) as e2:
+                    last_error = e2
+                    # Format 3: redirectTo in options (camelCase) - JS/TS style
+                    try:
+                        res = supabase.auth.sign_in_with_oauth({
+                            "provider": "google",
+                            "options": {
+                                "redirectTo": redirect_url
+                            }
+                        })
+                        if debug_mode:
+                            st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
+                    except (TypeError, KeyError, AttributeError, Exception) as e3:
+                        last_error = e3
+                        raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
+            
+            if res and hasattr(res, "url"):
+                oauth_url = res.url
+                if debug_mode:
+                    # Parse and show the redirect URL from the OAuth URL
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(oauth_url)
+                    params = parse_qs(parsed.query)
+                    redirect_param = params.get("redirect_to") or params.get("redirectTo")
+                    st.info(f"🔍 OAuth URL contains redirect_to: {redirect_param}")
+                    st.text(f"Full OAuth URL (first 200 chars): {oauth_url[:200]}...")
+                
+                st.markdown(f"[Click here to continue →]({oauth_url})")
+            else:
+                raise Exception("OAuth response missing URL")
+                
         except Exception as e:
             st.error(f"Google Sign-in failed: {e}")
             # Show more details in debug mode
             if st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true":
+                import traceback
                 st.error(f"Debug details: {str(e)}")
+                st.code(traceback.format_exc())
                 st.info(f"Attempted redirect URL: {redirect_url}")
+                st.info(f"Secrets OAUTH_REDIRECT_URL: {st.secrets.get('OAUTH_REDIRECT_URL', 'NOT SET')}")
 
     st.markdown("---")
     st.subheader("Or use Email / Password")
