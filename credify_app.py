@@ -7,6 +7,7 @@ import json
 import plotly.graph_objects as go
 import plotly.express as px
 from auth import show_login, logout_button  # logout now handled in topbar menu
+from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -169,6 +170,25 @@ def apply_theme(_: str | None = None):
         }}
         .card-title{{font-weight:700;margin-bottom:8px;}}
         .page-section{{margin: 24px 0 32px 0;}}
+        
+        /* Search dropdown */
+        .search-container{{position:relative;flex:1;max-width:400px;margin:0 16px;}}
+        .search-dropdown{{
+            position:absolute;top:100%;left:0;right:0;background:#FFFFFF;border:1px solid #E6E6E6;
+            border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:1001;max-height:400px;
+            overflow-y:auto;margin-top:4px;
+        }}
+        .search-result-item{{
+            padding:12px 16px;border-bottom:1px solid #F0F0F0;cursor:pointer;display:flex;
+            align-items:center;gap:12px;transition:background-color 0.15s;
+        }}
+        .search-result-item:hover{{background-color:#F8F8F8;}}
+        .search-result-item:last-child{{border-bottom:none;}}
+        .search-result-avatar{{width:40px;height:40px;border-radius:50%;flex-shrink:0;}}
+        .search-result-content{{flex:1;min-width:0;}}
+        .search-result-name{{font-weight:600;font-size:14px;margin-bottom:2px;}}
+        .search-result-meta{{font-size:12px;color:#666;}}
+        .search-result-action{{flex-shrink:0;}}
 
         /* Fixed Top Navigation */
         :root{{--topbar-h:56px;}}
@@ -176,8 +196,10 @@ def apply_theme(_: str | None = None):
         .topnav .brand{{font-weight:800;font-size:18px;}}
         .topnav .actions{{display:flex;align-items:center;gap:12px;}}
         .topnav .avatar{{width:28px;height:28px;border-radius:50%;background:#E6E6E6;display:inline-block;}}
-        /* Offset main container below fixed topbar */
-        [data-testid="stAppViewContainer"] > .main {{padding-top: calc(var(--topbar-h) + 8px) !important;}}
+        /* Search positioning - below topbar */
+        .search-wrapper{{position:fixed;top:var(--topbar-h);left:0;right:0;background:#FFFFFF;border-bottom:1px solid #E6E6E6;padding:8px 24px;z-index:999;display:flex;justify-content:center;}}
+        /* Offset main container below topbar and search */
+        [data-testid="stAppViewContainer"] > .main {{padding-top: calc(var(--topbar-h) + 56px) !important;}}
 
         /* Sidebar navigation styling */
         [data-testid="stSidebar"] [role="radiogroup"] label p{{font-size:15px !important;font-weight:600 !important;}}
@@ -234,6 +256,95 @@ def get_user_id_by_email_cached(email: str) -> str | None:
     if not res.data:
         return None
     return res.data[0]["u_id"]
+
+
+def get_current_user_id() -> str | None:
+    """Get current logged-in user's ID from session state."""
+    return get_user_id_by_email_cached(normalized_email)
+
+
+def update_user_metrics(u_id: str):
+    """Recalculate and update user_metrics for a given user based on their projects."""
+    # 1. Find all project IDs for this user
+    projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+    project_ids = [p["p_id"] for p in projects_resp.data]
+    if not project_ids:
+        # No projects, set all to zero
+        supabase.table("user_metrics").upsert({
+            "u_id": u_id,
+            "total_view_count": 0,
+            "total_like_count": 0,
+            "total_comment_count": 0,
+            "total_share_count": 0,
+            "avg_engagement_rate": 0,
+            "updated_at": datetime.utcnow().isoformat()
+        }).execute()
+        return
+
+    # 2. Get latest metrics for each project
+    # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+    try:
+        metrics_resp = supabase.table("latest_youtube_metrics").select("p_id, view_count, like_count, comment_count, share_count").in_("p_id", project_ids).execute()
+        latest_metrics = list(metrics_resp.data or [])
+    except Exception:
+        # Fallback: query youtube_metrics and get the latest entry per project
+        metrics_resp = supabase.table("youtube_metrics").select("p_id, view_count, like_count, comment_count, fetched_at").in_("p_id", project_ids).order("fetched_at", desc=True).execute()
+        # Group by p_id and take the first (most recent) entry for each
+        seen_pids = set()
+        latest_metrics = []
+        for m in (metrics_resp.data or []):
+            pid = m["p_id"]
+            if pid not in seen_pids:
+                latest_metrics.append({
+                    "p_id": pid,
+                    "view_count": m.get("view_count", 0) or 0,
+                    "like_count": m.get("like_count", 0) or 0,
+                    "comment_count": m.get("comment_count", 0) or 0,
+                    "share_count": m.get("share_count", 0) or 0,  # May not exist in youtube_metrics
+                })
+                seen_pids.add(pid)
+    
+    if not latest_metrics:
+        # No metrics found, set all to zero
+        supabase.table("user_metrics").upsert({
+            "u_id": u_id,
+            "total_view_count": 0,
+            "total_like_count": 0,
+            "total_comment_count": 0,
+            "total_share_count": 0,
+            "avg_engagement_rate": 0,
+            "updated_at": datetime.utcnow().isoformat()
+        }).execute()
+        return
+
+    # 3. Aggregate totals
+    total_views = sum(m.get("view_count", 0) or 0 for m in latest_metrics)
+    total_likes = sum(m.get("like_count", 0) or 0 for m in latest_metrics)
+    total_comments = sum(m.get("comment_count", 0) or 0 for m in latest_metrics)
+    total_shares = sum(m.get("share_count", 0) or 0 for m in latest_metrics)
+    
+    # Calculate engagement rate (likes + comments + shares) / views * 100
+    engagement_rates = []
+    for m in latest_metrics:
+        views = m.get("view_count", 0) or 0
+        if views > 0:
+            likes = m.get("like_count", 0) or 0
+            comments = m.get("comment_count", 0) or 0
+            shares = m.get("share_count", 0) or 0
+            engagement = ((likes + comments + shares) / views) * 100
+            engagement_rates.append(engagement)
+    avg_engagement = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0
+
+    # 4. Upsert into user_metrics
+    supabase.table("user_metrics").upsert({
+        "u_id": u_id,
+        "total_view_count": total_views,
+        "total_like_count": total_likes,
+        "total_comment_count": total_comments,
+        "total_share_count": total_shares,
+        "avg_engagement_rate": avg_engagement,
+        "updated_at": datetime.utcnow().isoformat()
+    }).execute()
 
 
 @st.cache_data(show_spinner=False)
@@ -330,7 +441,10 @@ def show_profile():
     user = user_res.data[0]
     u_id = user["u_id"]
 
-    # Fetch metrics
+    # Always recalculate metrics on page load to ensure fresh data
+    update_user_metrics(u_id)
+
+    # Fetch updated metrics
     metrics_res = supabase.table("user_metrics").select("*").eq("u_id", u_id).execute()
     metrics = metrics_res.data[0] if metrics_res.data else {
         "total_view_count": 0, "total_like_count": 0,
@@ -403,13 +517,29 @@ def show_profile():
     pids = list(unique_projects.keys())
     metrics_map = {}
     if pids:
-        metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
-        for m in (metrics_resp.data or []):
-            metrics_map[m["p_id"]] = {
-                "view_count": m.get("view_count", 0) or 0,
-                "like_count": m.get("like_count", 0) or 0,
-                "comment_count": m.get("comment_count", 0) or 0,
-            }
+        # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+        try:
+            metrics_resp = supabase.table("latest_youtube_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
+            for m in (metrics_resp.data or []):
+                pid = m["p_id"]
+                metrics_map[pid] = {
+                    "view_count": m.get("view_count", 0) or 0,
+                    "like_count": m.get("like_count", 0) or 0,
+                    "comment_count": m.get("comment_count", 0) or 0,
+                }
+        except Exception:
+            # Fallback: query youtube_metrics and get the latest entry per project
+            metrics_resp = supabase.table("youtube_metrics").select("p_id, view_count, like_count, comment_count, fetched_at").in_("p_id", pids).order("fetched_at", desc=True).execute()
+            seen_pids = set()
+            for m in (metrics_resp.data or []):
+                pid = m["p_id"]
+                if pid not in seen_pids:
+                    metrics_map[pid] = {
+                        "view_count": m.get("view_count", 0) or 0,
+                        "like_count": m.get("like_count", 0) or 0,
+                        "comment_count": m.get("comment_count", 0) or 0,
+                    }
+                    seen_pids.add(pid)
 
     sorted_projects = []
     for pid, rec in unique_projects.items():
@@ -503,15 +633,18 @@ def render_add_credit_form():
                 "p_thumbnail_url": video_data["p_thumbnail_url"]
             }).execute()
 
-            # Upsert to avoid duplicate metrics entries
-            supabase.table("youtube_metrics").upsert({
-                "p_id": video_data["p_id"],
-                "platform": "youtube",
-                "fetched_at": datetime.utcnow().isoformat(),
-                "view_count": video_data["view_count"],
-                "like_count": video_data["like_count"],
-                "comment_count": video_data["comment_count"]
-            }, on_conflict=["p_id", "fetched_at"]).execute()
+            # Insert metrics entry (fetched_at is timestamp, so duplicates unlikely, but check to be safe)
+            fetched_at = datetime.utcnow().isoformat()
+            existing_metrics = supabase.table("youtube_metrics").select("p_id").eq("p_id", video_data["p_id"]).eq("fetched_at", fetched_at).execute()
+            if not existing_metrics.data:
+                supabase.table("youtube_metrics").insert({
+                    "p_id": video_data["p_id"],
+                    "platform": "youtube",
+                    "fetched_at": fetched_at,
+                    "view_count": video_data["view_count"],
+                    "like_count": video_data["like_count"],
+                    "comment_count": video_data["comment_count"]
+                }).execute()
 
             st.success(f"✅ Added new project: {video_data['p_title']}")
 
@@ -527,28 +660,188 @@ def render_add_credit_form():
 
         for role_entry in st.session_state.selected_roles:
             _, role_name = role_entry.split(" - ")
-            # Upsert to prevent duplicate role assignments
-            supabase.table("user_projects").upsert({
-                "u_id": u_id,
-                "p_id": video_id,
-                "u_role": role_name
-            }, on_conflict=["u_id", "p_id", "u_role"]).execute()
+            # Check if this role assignment already exists to prevent duplicates
+            existing = supabase.table("user_projects").select("u_id").eq("u_id", u_id).eq("p_id", video_id).eq("u_role", role_name).execute()
+            if not existing.data:
+                # Insert only if it doesn't exist
+                supabase.table("user_projects").insert({
+                    "u_id": u_id,
+                    "p_id": video_id,
+                    "u_role": role_name
+                }).execute()
 
+        # Update user metrics after credits are added
+        update_user_metrics(u_id)
+        
         st.success(f"🎉 {name} is now credited for: {', '.join(st.session_state.selected_roles)}!")
         st.balloons()
         st.session_state.selected_roles = []
+        st.rerun()  # Refresh page to show updated metrics
 
 # -------------------------------
-# PAGE 3 — EXPLORE
+# PAGE 3 — HOME FEED
 # -------------------------------
 def show_home_page():
     st.title("Home")
-    left, right = st.columns([2,1])
-    with left:
-        st.markdown("<div class='page-section card'><div class='card-title'>For You</div><p>Your personalized feed will appear here.</p></div>", unsafe_allow_html=True)
-        st.markdown("<div class='card'><div class='card-title'>Recent Highlights</div><p>Coming soon: recent credits and updates.</p></div>", unsafe_allow_html=True)
-    with right:
-        st.markdown("<div class='card'><div class='card-title'>Right Panel</div><p>Placeholder for charts or top creators.</p></div>", unsafe_allow_html=True)
+    
+    current_u_id = get_current_user_id()
+    if not current_u_id:
+        st.info("Please complete your profile to see your feed.")
+        return
+    
+    # Get list of followed users
+    followed_ids = get_following(supabase, current_u_id)
+    
+    if not followed_ids:
+        st.info("Follow creators to see their updates here. Use the search bar above to discover and follow others!")
+        return
+    
+    # Fetch recent activities from followed users
+    # 1. Get recent projects from followed users (via user_projects)
+    projects_res = supabase.table("user_projects").select(
+        "p_id, u_id, created_at, projects(p_id, p_title, p_link, p_thumbnail_url, p_created_at)"
+    ).in_("u_id", followed_ids).order("created_at", desc=True).limit(50).execute()
+    
+    # 2. Get recent metric updates (youtube_metrics for projects from followed users)
+    # First get project IDs from followed users
+    user_projects_res = supabase.table("user_projects").select("p_id, u_id").in_("u_id", followed_ids).execute()
+    followed_project_ids = [up["p_id"] for up in (user_projects_res.data or [])]
+    # Map project IDs to user IDs for metrics
+    project_to_user = {up["p_id"]: up["u_id"] for up in (user_projects_res.data or [])}
+    
+    metric_updates = []
+    if followed_project_ids:
+        metrics_res = supabase.table("youtube_metrics").select(
+            "p_id, fetched_at, projects(p_id, p_title, p_link, p_thumbnail_url, p_created_at)"
+        ).in_("p_id", followed_project_ids).order("fetched_at", desc=True).limit(50).execute()
+        
+        # Process metrics: use project_to_user map to get u_id
+        for m in (metrics_res.data or []):
+            project = m.get("projects", {})
+            p_id = m.get("p_id")
+            if project and p_id and p_id in project_to_user:
+                metric_updates.append({
+                    "type": "metric_update",
+                    "u_id": project_to_user[p_id],
+                    "p_id": project.get("p_id"),
+                    "p_title": project.get("p_title"),
+                    "p_link": project.get("p_link"),
+                    "p_thumbnail_url": project.get("p_thumbnail_url"),
+                    "timestamp": m.get("fetched_at"),
+                })
+    
+    # 3. Combine and format project activities
+    project_activities = []
+    for up in (projects_res.data or []):
+        project = up.get("projects", {})
+        if project:
+            project_activities.append({
+                "type": "new_project",
+                "u_id": up.get("u_id"),
+                "p_id": project.get("p_id"),
+                "p_title": project.get("p_title"),
+                "p_link": project.get("p_link"),
+                "p_thumbnail_url": project.get("p_thumbnail_url"),
+                "timestamp": project.get("p_created_at") or up.get("created_at"),
+            })
+    
+    # 4. Combine all activities and deduplicate by project ID (keep most recent)
+    all_activities = project_activities + metric_updates
+    # Deduplicate: if same project appears multiple times, keep only the most recent entry
+    activities_by_project = {}
+    for activity in all_activities:
+        p_id = activity.get("p_id")
+        if p_id:
+            # If we haven't seen this project, or this activity is more recent, keep it
+            if p_id not in activities_by_project:
+                activities_by_project[p_id] = activity
+            else:
+                # Compare timestamps - keep the more recent one
+                existing_timestamp = activities_by_project[p_id].get("timestamp", "")
+                current_timestamp = activity.get("timestamp", "")
+                if current_timestamp > existing_timestamp:
+                    activities_by_project[p_id] = activity
+    
+    # Convert back to list and sort by timestamp
+    deduplicated_activities = list(activities_by_project.values())
+    deduplicated_activities.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    
+    # Limit to 10 most recent
+    feed_items = deduplicated_activities[:10]
+    
+    if not feed_items:
+        st.info("No recent activity from creators you follow.")
+        return
+    
+    # Get user info for display (batch fetch)
+    feed_user_ids = list(set(item["u_id"] for item in feed_items))
+    users_res = supabase.table("users").select("u_id, u_name, u_email").in_("u_id", feed_user_ids).execute()
+    users_map = {u["u_id"]: u for u in (users_res.data or [])}
+    
+    # Get project-specific metrics for each feed item (not user totals)
+    feed_project_ids = [item["p_id"] for item in feed_items if item.get("p_id")]
+    project_metrics_map = {}
+    if feed_project_ids:
+        # Try latest_youtube_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
+        try:
+            metrics_res = supabase.table("latest_youtube_metrics").select("p_id, view_count").in_("p_id", feed_project_ids).execute()
+            for m in (metrics_res.data or []):
+                pid = m["p_id"]
+                project_metrics_map[pid] = m.get("view_count", 0) or 0
+        except Exception:
+            # Fallback: query youtube_metrics and get the latest entry per project
+            metrics_res = supabase.table("youtube_metrics").select("p_id, view_count, fetched_at").in_("p_id", feed_project_ids).order("fetched_at", desc=True).execute()
+            seen_pids = set()
+            for m in (metrics_res.data or []):
+                pid = m["p_id"]
+                if pid not in seen_pids:
+                    project_metrics_map[pid] = m.get("view_count", 0) or 0
+                    seen_pids.add(pid)
+    
+    # Display feed
+    st.markdown("### Your Feed")
+    st.caption(f"Recent activity from {len(followed_ids)} creator{'s' if len(followed_ids) != 1 else ''} you follow")
+    
+    for item in feed_items:
+        user = users_map.get(item["u_id"], {})
+        user_name = user.get("u_name", "Unknown Creator")
+        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user_name}"
+        # Get project-specific view count for this feed item
+        project_views = project_metrics_map.get(item.get("p_id"), 0)
+        activity_type = "New project" if item["type"] == "new_project" else "Metrics updated"
+        timestamp = item.get("timestamp", "")
+        
+        # Parse and format timestamp
+        try:
+            if timestamp:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                time_ago = datetime.now(timezone.utc) - dt.replace(tzinfo=timezone.utc)
+                if time_ago.days > 0:
+                    time_str = f"{time_ago.days} day{'s' if time_ago.days != 1 else ''} ago"
+                elif time_ago.seconds > 3600:
+                    hours = time_ago.seconds // 3600
+                    time_str = f"{hours} hour{'s' if hours != 1 else ''} ago"
+                else:
+                    mins = time_ago.seconds // 60
+                    time_str = f"{mins} minute{'s' if mins != 1 else ''} ago" if mins > 0 else "Just now"
+            else:
+                time_str = "Recently"
+        except:
+            time_str = "Recently"
+        
+        # Feed card
+        with st.container():
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                st.image(avatar_url, width=50)
+            with col2:
+                st.markdown(f"**{user_name}** · {activity_type} · {time_str}")
+                if item.get("p_title"):
+                    st.markdown(f"[{item['p_title']}]({item.get('p_link', '#')})")
+                if project_views > 0:
+                    st.caption(f"Views: {project_views:,}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 def show_notifications_page():
@@ -854,12 +1147,83 @@ def show_settings_page():
 
 
 # -------------------------------
-# TOP BAR (avatar + notifications)
+# SEARCH COMPONENTS
+# -------------------------------
+def render_search_result_item(user: dict, current_u_id: str):
+    """Render a single search result item in the dropdown."""
+    avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user.get('u_name', 'user')}"
+    is_following_user = user.get("is_following", False)
+    total_views = user.get("total_views", 0)
+    bio = user.get("u_bio", "")
+    
+    # Determine meta text (bio or views)
+    meta_text = bio if bio else f"{total_views:,} views" if total_views > 0 else "No metrics yet"
+    if len(meta_text) > 60:
+        meta_text = meta_text[:57] + "..."
+    
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown(f"""
+            <div class='search-result-item'>
+                <img src='{avatar_url}' class='search-result-avatar' />
+                <div class='search-result-content'>
+                    <div class='search-result-name'>{user.get('u_name', 'Unknown')}</div>
+                    <div class='search-result-meta'>{meta_text}</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        button_label = "Unfollow" if is_following_user else "Follow"
+        button_kind = "secondary" if is_following_user else "primary"
+        if st.button(button_label, key=f"search_follow_{user['u_id']}", use_container_width=True):
+            try:
+                if is_following_user:
+                    unfollow_user(supabase, current_u_id, user["u_id"])
+                    st.success(f"Unfollowed {user.get('u_name', 'user')}")
+                else:
+                    follow_user(supabase, current_u_id, user["u_id"])
+                    st.success(f"Following {user.get('u_name', 'user')}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+
+def render_search_dropdown(search_query: str, current_u_id: str):
+    """Render search dropdown with results."""
+    if not search_query or len(search_query.strip()) < 1:
+        return
+    
+    users = search_users(supabase, search_query, current_u_id)
+    
+    if not users:
+        st.markdown("""
+            <div class='search-dropdown'>
+                <div style='padding:16px;text-align:center;color:#666;'>No users found</div>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Render dropdown with results
+    st.markdown('<div class="search-dropdown">', unsafe_allow_html=True)
+    for user in users:
+        render_search_result_item(user, current_u_id)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# -------------------------------
+# TOP BAR (avatar + notifications + search)
 # -------------------------------
 def show_topbar():
-    # Simple fixed top navigation with placeholders
-    st.markdown(
-        """
+    """Render top navigation bar with integrated search."""
+    current_u_id = get_current_user_id()
+    
+    # Initialize search query in session state if not present
+    if "search_query" not in st.session_state:
+        st.session_state.search_query = ""
+    
+    # Topbar HTML with search integrated
+    st.markdown("""
         <div class='topnav'>
           <div class='brand'>Credify</div>
           <div class='actions'>
@@ -868,9 +1232,30 @@ def show_topbar():
             <span class='avatar'></span>
           </div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """, unsafe_allow_html=True)
+    
+    # Search container positioned below topbar (in fixed wrapper)
+    if current_u_id:
+        st.markdown('<div class="search-wrapper">', unsafe_allow_html=True)
+        st.markdown('<div class="search-container">', unsafe_allow_html=True)
+        search_input = st.text_input(
+            "Search users",
+            value=st.session_state.search_query,
+            key="topbar_search",
+            placeholder="Search by name or email...",
+            label_visibility="collapsed"
+        )
+        
+        # Update session state on input change
+        if search_input != st.session_state.search_query:
+            st.session_state.search_query = search_input
+        
+        # Show dropdown if there's a query
+        if st.session_state.search_query:
+            render_search_dropdown(st.session_state.search_query, current_u_id)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------
 # SIDEBAR NAVIGATION
