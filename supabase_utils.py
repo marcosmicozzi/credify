@@ -81,10 +81,10 @@ def search_users(supabase: Client, query: str, current_u_id: str) -> List[dict]:
     query_clean = query.strip()
     
     # Search by name (ilike for case-insensitive partial match)
-    name_results = supabase.table("users").select("u_id, u_name, u_email, u_bio").ilike("u_name", f"%{query_clean}%").neq("u_id", current_u_id).limit(20).execute()
+    name_results = supabase.table("users").select("u_id, u_name, u_email, u_bio, profile_image_url").ilike("u_name", f"%{query_clean}%").neq("u_id", current_u_id).limit(20).execute()
     
     # Search by email (ilike for case-insensitive partial match)
-    email_results = supabase.table("users").select("u_id, u_name, u_email, u_bio").ilike("u_email", f"%{query_clean}%").neq("u_id", current_u_id).limit(20).execute()
+    email_results = supabase.table("users").select("u_id, u_name, u_email, u_bio, profile_image_url").ilike("u_email", f"%{query_clean}%").neq("u_id", current_u_id).limit(20).execute()
     
     # Combine and deduplicate by u_id
     seen_ids = set()

@@ -588,7 +588,12 @@ def show_profile():
     u_id = user["u_id"]
 
     # Profile header: image centered, name below it (centered)
-    avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
+    # Use saved profile image if available, otherwise fall back to generated avatar
+    profile_image_url = user.get("profile_image_url")
+    if profile_image_url:
+        avatar_url = profile_image_url
+    else:
+        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
     st.markdown(f"""
         <div style="text-align: center; margin-bottom: 24px;">
             <img src="{avatar_url}" 
@@ -1027,7 +1032,7 @@ def show_home_page():
     
     # Get user info for display (batch fetch)
     feed_user_ids = list(set(item["u_id"] for item in feed_items))
-    users_res = supabase.table("users").select("u_id, u_name, u_email").in_("u_id", feed_user_ids).execute()
+    users_res = supabase.table("users").select("u_id, u_name, u_email, profile_image_url").in_("u_id", feed_user_ids).execute()
     users_map = {u["u_id"]: u for u in (users_res.data or [])}
     
     # Get project-specific metrics for each feed item (not user totals)
@@ -1057,7 +1062,12 @@ def show_home_page():
     for item in feed_items:
         user = users_map.get(item["u_id"], {})
         user_name = user.get("u_name", "Unknown Creator")
-        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user_name}"
+        # Use saved profile image if available, otherwise fall back to generated avatar
+        profile_image_url = user.get("profile_image_url")
+        if profile_image_url:
+            avatar_url = profile_image_url
+        else:
+            avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user_name}"
         # Get project-specific view count for this feed item
         project_views = project_metrics_map.get(item.get("p_id"), 0)
         activity_type = "New project" if item["type"] == "new_project" else "Metrics updated"
@@ -1482,7 +1492,60 @@ def show_analytics_page():
 
 def show_settings_page():
     st.title("Settings")
-    st.info("Profile editing and preferences coming soon.")
+    
+    # Create tabs for different settings sections
+    tab1, tab2 = st.tabs(["Profile", "Preferences"])
+    
+    with tab1:
+        st.markdown("### Profile Picture")
+        st.caption("Paste a public image URL to set your profile picture")
+        
+        # Get current user info
+        user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
+        if not user_res.data:
+            st.error("User not found")
+            return
+        
+        user = user_res.data[0]
+        current_image_url = user.get("profile_image_url", "")
+        
+        # Display current profile picture if exists
+        if current_image_url:
+            st.markdown("#### Current Profile Picture")
+            st.image(current_image_url, width=150, use_container_width=False)
+        
+        # URL input
+        image_url = st.text_input(
+            "Profile Picture URL",
+            value=current_image_url,
+            placeholder="https://example.com/profile.jpg",
+            key="profile_image_url_input"
+        )
+        
+        # Live preview
+        if image_url and image_url.strip():
+            st.markdown("#### Preview")
+            try:
+                st.image(image_url, width=150, use_container_width=False)
+            except Exception as e:
+                st.error(f"Could not load image: {str(e)}")
+        
+        # Save button
+        if st.button("💾 Save Profile Picture", key="save_profile_picture"):
+            if image_url and image_url.strip():
+                try:
+                    supabase.table("users").update({
+                        "profile_image_url": image_url.strip()
+                    }).eq("u_email", normalized_email).execute()
+                    st.success("✅ Profile picture saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving profile picture: {str(e)}")
+            else:
+                st.warning("Please enter a valid URL")
+    
+    with tab2:
+        st.info("Preferences coming soon.")
 
 
 # -------------------------------
@@ -1490,7 +1553,12 @@ def show_settings_page():
 # -------------------------------
 def render_search_result_item(user: dict, current_u_id: str):
     """Render a single search result item in the dropdown."""
-    avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user.get('u_name', 'user')}"
+    # Use saved profile image if available, otherwise fall back to generated avatar
+    profile_image_url = user.get("profile_image_url")
+    if profile_image_url:
+        avatar_url = profile_image_url
+    else:
+        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user.get('u_name', 'user')}"
     is_following_user = user.get("is_following", False)
     total_views = user.get("total_views", 0)
     bio = user.get("u_bio", "")
