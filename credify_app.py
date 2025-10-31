@@ -589,15 +589,6 @@ def show_profile():
         </div>
     """, unsafe_allow_html=True)
     
-    # User name centered and bold
-    st.markdown(f"<h1 style='text-align: center; margin-bottom: 8px; font-weight: 800;'>{user['u_name']}</h1>", unsafe_allow_html=True)
-    
-    # Bio centered below name (if exists)
-    if user.get("u_bio"):
-        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 8px; margin-bottom: 16px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
-    else:
-        st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
-
     # Metrics - Profile shows live data only
     # Live refresh button with cooldown to protect API limits
     # Store live metrics in session state to persist during user session
@@ -650,18 +641,39 @@ def show_profile():
             "avg_engagement_rate": 0
         }
     
-    # Compact metrics layout: centered stats badge with reduced spacing
-    st.markdown("""
+    # User name centered and bold with balanced spacing
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{user['u_name']}</h1>", unsafe_allow_html=True)
+    
+    # Bio centered below name (if exists) with consistent spacing
+    bio_spacing = "4px" if user.get("u_bio") else "0px"
+    metrics_top_margin = "16px" if user.get("u_bio") else "20px"  # Adjust to maintain 20px total spacing
+    if user.get("u_bio"):
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+    
+    # Compact metrics layout: centered stats badge with balanced spacing
+    st.markdown(f"""
         <style>
-        .profile-metrics-container {
+        .profile-metrics-container {{
             display: flex;
             justify-content: center;
             align-items: center;
             gap: 50px;
-            margin: 12px 0 24px 0;
-        }
+            margin: {metrics_top_margin} 0 20px 0;
+            flex-wrap: wrap;
+        }}
         .profile-metric-item {
             text-align: center;
+            min-width: 60px;
+        }
+        @media (max-width: 768px) {
+            .profile-metrics-container {
+                gap: 30px;
+            }
+        }
+        @media (max-width: 480px) {
+            .profile-metrics-container {
+                gap: 20px;
+            }
         }
         </style>
     """, unsafe_allow_html=True)
@@ -685,21 +697,42 @@ def show_profile():
     """
     st.markdown(metric_html, unsafe_allow_html=True)
     
-    # Refresh button below metrics (centered, compact)
-    refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 1, 1])
-    with refresh_col2:
-        disabled = remaining > 0
-        label = "Refresh" if not disabled else f"{remaining}s"
-        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=False):
-            with st.spinner("Fetching latest metrics from YouTube..."):
-                live_data = fetch_live_metrics_for_user(u_id)
-            if live_data:
-                st.session_state.live_metrics = live_data
-                st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
-                st.success(f"Fetched latest metrics for {len(live_data)} videos")
-                st.rerun()
-            else:
-                st.warning("Could not fetch live metrics right now.")
+    # Refresh button below metrics (perfectly centered)
+    st.markdown("""
+        <style>
+        .refresh-button-wrapper {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 0;
+            margin-top: 0;
+        }
+        .refresh-button-wrapper > div {
+            width: auto !important;
+        }
+        /* Ensure consistent spacing between name/metrics and metrics/refresh */
+        .profile-header-section {
+            margin-bottom: 20px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    disabled = remaining > 0
+    label = "Refresh" if not disabled else f"{remaining}s"
+    
+    st.markdown('<div class="refresh-button-wrapper">', unsafe_allow_html=True)
+    if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=False):
+        with st.spinner("Fetching latest metrics from YouTube..."):
+            live_data = fetch_live_metrics_for_user(u_id)
+        if live_data:
+            st.session_state.live_metrics = live_data
+            st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
+            st.success(f"Fetched latest metrics for {len(live_data)} videos")
+            st.rerun()
+        else:
+            st.warning("Could not fetch live metrics right now.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
 
