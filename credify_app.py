@@ -219,19 +219,26 @@ def apply_theme(_: str | None = None):
             font-size: 12px !important;
         }}
         
-        /* Add Credits button styling - matches login buttons */
+        /* Profile section buttons - light hover styling */
         .add-credits-button-wrapper button {{
-            background-color: #2E2E2E !important;
-            color: #FFFFFF !important;
-            border: 1px solid #2E2E2E !important;
+            background-color: #FFFFFF !important;
+            color: #111111 !important;
+            border: 1px solid #E0E0E0 !important;
             border-radius: 8px !important;
             font-weight: 600 !important;
             transition: all 0.2s ease-in-out !important;
             width: 100% !important;
         }}
         .add-credits-button-wrapper button:hover {{
-            background-color: #333333 !important;
-            border-color: #333333 !important;
+            background-color: #F2F2F2 !important;
+            border-color: #E0E0E0 !important;
+        }}
+        /* Refresh button in Profile section */
+        .refresh-button-wrapper button {{
+            transition: all 0.2s ease-in-out !important;
+        }}
+        .refresh-button-wrapper button:hover {{
+            background-color: #F2F2F2 !important;
         }}
         </style>
     """, unsafe_allow_html=True)
