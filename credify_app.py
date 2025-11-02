@@ -171,6 +171,70 @@ def apply_theme(_: str | None = None):
             transform:translateY(-2px);
             box-shadow:0 4px 12px rgba(0,0,0,0.10);
         }}
+        /* Project cards - equal height and alignment */
+        /* Make Streamlit columns flex containers with equal height */
+        div[data-testid="column"] {{
+            display: flex !important;
+            flex-direction: column !important;
+        }}
+        /* Make project cards fill column height */
+        .project-card {{
+            display: flex !important;
+            flex-direction: column !important;
+            height: 100% !important;
+            flex-grow: 1;
+        }}
+        /* Ensure images have consistent height */
+        .project-card img {{
+            width: 100% !important;
+            height: 200px !important;
+            object-fit: cover !important;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+        }}
+        /* Handle "No thumbnail available" info box */
+        .project-card .stAlert {{
+            height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+        }}
+        /* Consistent text spacing in project cards */
+        .project-card > p {{
+            margin: 0 0 8px 0 !important;
+            line-height: 1.4;
+        }}
+        /* Title with consistent height (2 lines max) */
+        .project-card > p:first-of-type {{
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            min-height: 3.2em !important; /* Reserve space for title (2 lines) */
+            display: -webkit-box !important;
+            -webkit-line-clamp: 2 !important;
+            -webkit-box-orient: vertical !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            flex-shrink: 0;
+        }}
+        /* Role with consistent height */
+        .project-card > p:nth-of-type(2) {{
+            font-style: italic !important;
+            color: #666 !important;
+            font-size: 12px !important;
+            min-height: 1.5em !important; /* Reserve space for role */
+            margin-bottom: 8px !important;
+            flex-shrink: 0;
+        }}
+        /* Metrics caption - push to bottom */
+        .project-card > .stCaption {{
+            margin-top: auto !important;
+            padding-top: 8px !important;
+            border-top: 1px solid #F0F0F0 !important;
+            flex-shrink: 0;
+        }}
         .card-title{{font-weight:700;margin-bottom:8px;}}
         .page-section{{margin: 24px 0 32px 0;}}
         
