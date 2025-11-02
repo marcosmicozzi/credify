@@ -23,7 +23,8 @@ def lambda_handler(event, context):
     for vid in video_ids:
         # Fetch video metrics from YouTube Data API
         yt_response = requests.get(
-            f"https://www.googleapis.com/youtube/v3/videos?part=statistics&id={vid}&key={YOUTUBE_API_KEY}"
+            f"https://www.googleapis.com/youtube/v3/videos?part=statistics&id={vid}&key={YOUTUBE_API_KEY}",
+            timeout=15  # Prevent Lambda from hanging indefinitely
         )
         yt_response.raise_for_status()
         data = yt_response.json()

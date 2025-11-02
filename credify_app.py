@@ -6,6 +6,7 @@ import requests
 import json
 import plotly.graph_objects as go
 import plotly.express as px
+from html import escape
 from auth import show_login, logout_button, supabase as auth_supabase  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 import os
@@ -246,13 +247,64 @@ def apply_theme(_: str | None = None):
 # -------------------------------
 # HELPERS
 # -------------------------------
+def sanitize_user_input(text: str) -> str:
+    """Sanitize user input by removing HTML tags and dangerous content.
+    
+    This function strips HTML tags and potentially malicious content from user-generated
+    text while preserving legitimate text. The sanitized text is safe to display
+    without escaping.
+    
+    Args:
+        text: Input string that may contain HTML or special characters
+        
+    Returns:
+        Sanitized string safe for display
+    """
+    if not text:
+        return ""
+    
+    # First decode HTML entities (handles legacy escaped data like &lt;script&gt;)
+    # Use html.unescape to convert &lt; back to <, &gt; back to >, etc.
+    from html import unescape
+    text = unescape(text)
+    
+    # Remove HTML tags using regex (more comprehensive than simple replace)
+    # This pattern matches any HTML tag including attributes
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Remove any remaining script-like patterns (extra safety)
+    text = re.sub(r'javascript:', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'on\w+\s*=', '', text, flags=re.IGNORECASE)
+    
+    # Strip leading/trailing whitespace and collapse multiple spaces
+    text = ' '.join(text.split())
+    
+    return text
+
+
 def extract_video_id(url):
     pattern = r"(?:v=|youtu\\.be/|embed/)([a-zA-Z0-9_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
 
 
-def fetch_youtube_data(video_id):
+def fetch_youtube_data(video_id: str) -> dict | None:
+    """Fetch YouTube video data from the YouTube Data API.
+    
+    Args:
+        video_id: YouTube video ID (must be exactly 11 characters)
+        
+    Returns:
+        Dictionary with video metadata or None if fetch/validation fails
+    """
+    # Validate video_id format (YouTube IDs are exactly 11 characters)
+    if not video_id or len(video_id) != 11:
+        return None
+    
+    # Additional validation: YouTube IDs contain only alphanumeric, hyphens, and underscores
+    if not video_id.replace("-", "").replace("_", "").isalnum():
+        return None
+    
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={YOUTUBE_API_KEY}"
     res = requests.get(url, timeout=15)
     if not res.ok:
@@ -265,19 +317,28 @@ def fetch_youtube_data(video_id):
         return None
 
     item = data["items"][0]
-    snippet = item["snippet"]
+    snippet = item.get("snippet", {})
     stats = item.get("statistics", {})
+    
+    # Get best available thumbnail (fallback chain: high -> medium -> default)
+    thumbnails = snippet.get("thumbnails", {})
+    thumbnail_url = None
+    for quality in ["high", "medium", "default"]:
+        if quality in thumbnails and isinstance(thumbnails[quality], dict) and "url" in thumbnails[quality]:
+            thumbnail_url = thumbnails[quality]["url"]
+            break
+    
     return {
         "p_id": video_id,
-        "p_title": snippet.get("title"),
-        "p_description": snippet.get("description"),
+        "p_title": snippet.get("title", "Untitled"),
+        "p_description": snippet.get("description", ""),
         "p_link": f"https://www.youtube.com/watch?v={video_id}",
-        "p_channel": snippet.get("channelTitle"),
+        "p_channel": snippet.get("channelTitle", "Unknown"),
         "p_posted_at": snippet.get("publishedAt"),
-        "p_thumbnail_url": snippet["thumbnails"]["high"]["url"],
-        "view_count": int(stats.get("viewCount", 0)),
-        "like_count": int(stats.get("likeCount", 0)),
-        "comment_count": int(stats.get("commentCount", 0))
+        "p_thumbnail_url": thumbnail_url,  # Can be None if no thumbnails available
+        "view_count": int(stats.get("viewCount", 0) or 0),
+        "like_count": int(stats.get("likeCount", 0) or 0),
+        "comment_count": int(stats.get("commentCount", 0) or 0)
     }
 
 
@@ -654,13 +715,17 @@ def show_profile():
         }
     
     # User name centered and bold with balanced spacing
-    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{user['u_name']}</h1>", unsafe_allow_html=True)
+    # Sanitize on display for defense in depth (handles both new and legacy data)
+    sanitized_name = sanitize_user_input(user.get('u_name', ''))
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{sanitized_name}</h1>", unsafe_allow_html=True)
     
     # Bio centered below name (if exists) with consistent spacing
     bio_spacing = "4px" if user.get("u_bio") else "0px"
     metrics_top_margin = "16px" if user.get("u_bio") else "20px"  # Adjust to maintain 20px total spacing
     if user.get("u_bio"):
-        st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{user['u_bio']}</p>", unsafe_allow_html=True)
+        # Sanitize on display for defense in depth (handles both new and legacy data)
+        sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: {bio_spacing}; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
     
     # Compact metrics layout: centered stats badge with balanced spacing
     # Calculate spacing for equal name-to-metrics and metrics-to-refresh spacing
@@ -813,8 +878,12 @@ def show_profile():
         roles = ", ".join(rec["roles"])
         with cols[i % 3]:
             st.markdown("<div class='project-card'>", unsafe_allow_html=True)
-            st.image(proj["p_thumbnail_url"], use_container_width=True)
-            st.markdown(f"**[{proj['p_title']}]({proj['p_link']})**  \n*{roles}*")
+            # Handle missing thumbnail gracefully
+            if proj.get("p_thumbnail_url"):
+                st.image(proj["p_thumbnail_url"], use_container_width=True)
+            else:
+                st.info("No thumbnail available")
+            st.markdown(f"**[{escape(proj['p_title'])}]({proj['p_link']})**  \n*{escape(roles)}*")
             m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
             st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
             st.markdown("</div>", unsafe_allow_html=True)
@@ -887,7 +956,7 @@ def render_add_credit_form():
                 "p_platform": "youtube",
                 "p_channel": video_data["p_channel"],
                 "p_posted_at": video_data["p_posted_at"],
-                "p_thumbnail_url": video_data["p_thumbnail_url"]
+                "p_thumbnail_url": video_data.get("p_thumbnail_url")  # Can be None if no thumbnail available
             }).execute()
 
             # Insert metrics entry (fetched_at is timestamp, so duplicates unlikely, but check to be safe)
@@ -905,11 +974,11 @@ def render_add_credit_form():
 
             st.success(f"Added new project: {video_data['p_title']}")
 
-        # Ensure user exists / update
+        # Ensure user exists / update (sanitize user inputs before saving)
         supabase.table("users").upsert({
             "u_email": normalized_email,
-            "u_name": name,
-            "u_bio": bio
+            "u_name": sanitize_user_input(name) if name else "",
+            "u_bio": sanitize_user_input(bio) if bio else ""
         }, on_conflict=["u_email"]).execute()
 
         user_record = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
@@ -1145,15 +1214,16 @@ def show_analytics_page():
         preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months"], index=2)
     with col_b:
         today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)  # Exclude today since metrics are gathered each morning
         if preset == "Last 7 days":
             start_date = today - timedelta(days=6)
-            end_date = today
+            end_date = yesterday
         elif preset == "Last 28 days":
             start_date = today - timedelta(days=27)
-            end_date = today
+            end_date = yesterday
         elif preset == "Last 12 months":
             start_date = today - timedelta(days=365)  # Full year
-            end_date = today
+            end_date = yesterday
 
     # Fetch data
     start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
@@ -1173,7 +1243,7 @@ def show_analytics_page():
     
     with st.spinner("Loading analytics..."):
         ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
-        # Fallback: if no rows (e.g., no snapshot today yet), try ending yesterday
+        # Fallback: if no rows, try going back one more day (in case yesterday also has no data)
         if ts_df.empty:
             end_date_fallback = end_date - timedelta(days=1)
             if end_date_fallback >= start_date:
@@ -1497,9 +1567,6 @@ def show_settings_page():
     tab1, tab2 = st.tabs(["Profile", "Preferences"])
     
     with tab1:
-        st.markdown("### Profile Picture")
-        st.caption("Paste a public image URL to set your profile picture")
-        
         # Get current user info
         user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
         if not user_res.data:
@@ -1507,6 +1574,54 @@ def show_settings_page():
             return
         
         user = user_res.data[0]
+        
+        # Name and Bio Section
+        st.markdown("### Name & Bio")
+        st.caption("Update your display name and bio")
+        
+        current_name = user.get("u_name", "")
+        current_bio = user.get("u_bio", "")
+        
+        name_input = st.text_input(
+            "Display Name",
+            value=current_name,
+            placeholder="Enter your name",
+            key="profile_name_input"
+        )
+        
+        bio_input = st.text_area(
+            "Bio (optional)",
+            value=current_bio,
+            placeholder="Tell us about yourself...",
+            key="profile_bio_input",
+            height=100
+        )
+        
+        # Save Name and Bio button
+        if st.button("💾 Save Name & Bio", key="save_name_bio"):
+            if not name_input or not name_input.strip():
+                st.error("Name is required")
+            else:
+                try:
+                    # Sanitize inputs before saving
+                    sanitized_name = sanitize_user_input(name_input.strip())
+                    sanitized_bio = sanitize_user_input(bio_input.strip()) if bio_input else ""
+                    
+                    supabase.table("users").update({
+                        "u_name": sanitized_name,
+                        "u_bio": sanitized_bio
+                    }).eq("u_email", normalized_email).execute()
+                    st.success("✅ Name and bio saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving name and bio: {str(e)}")
+        
+        st.markdown("---")
+        
+        # Profile Picture Section
+        st.markdown("### Profile Picture")
+        st.caption("Paste a public image URL to set your profile picture")
+        
         current_image_url = user.get("profile_image_url", "")
         
         # Display current profile picture if exists
@@ -1574,8 +1689,8 @@ def render_search_result_item(user: dict, current_u_id: str):
             <div class='search-result-item'>
                 <img src='{avatar_url}' class='search-result-avatar' />
                 <div class='search-result-content'>
-                    <div class='search-result-name'>{user.get('u_name', 'Unknown')}</div>
-                    <div class='search-result-meta'>{meta_text}</div>
+                    <div class='search-result-name'>{sanitize_user_input(user.get('u_name', 'Unknown'))}</div>
+                    <div class='search-result-meta'>{sanitize_user_input(meta_text) if meta_text else meta_text}</div>
                 </div>
             </div>
         """, unsafe_allow_html=True)
