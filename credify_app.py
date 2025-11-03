@@ -11,6 +11,7 @@ from auth import show_login, logout_button, supabase as auth_supabase  # logout 
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 # -------------------------------
 # INITIAL SETUP
@@ -350,6 +351,38 @@ def extract_video_id(url):
     pattern = r"(?:v=|youtu\\.be/|embed/)([a-zA-Z0-9_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
+
+
+def is_valid_image_url(url: str) -> bool:
+    """Basic validation for profile image URLs.
+
+    - Requires http/https scheme and a hostname
+    - Rejects overly long URLs
+    - Attempts a HEAD request to confirm Content-Type is image/*
+    - Falls back to file extension heuristics if HEAD fails
+    """
+    if not url:
+        return False
+    candidate = url.strip()
+    if len(candidate) > 2048:
+        return False
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.netloc:
+        return False
+    path_lower = (parsed.path or "").lower()
+    has_image_ext = any(path_lower.endswith(ext) for ext in [
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"
+    ])
+    try:
+        head_resp = requests.head(candidate, timeout=5, allow_redirects=True)
+        content_type = (head_resp.headers.get("Content-Type") or "").lower()
+        if content_type.startswith("image/"):
+            return True
+    except Exception:
+        pass
+    return has_image_ext
 
 
 def fetch_youtube_data(video_id: str) -> dict | None:
@@ -1772,14 +1805,17 @@ def show_settings_page():
         # Save button
         if st.button("💾 Save Profile Picture", key="save_profile_picture"):
             if image_url and image_url.strip():
-                try:
-                    supabase.table("users").update({
-                        "profile_image_url": image_url.strip()
-                    }).eq("u_email", normalized_email).execute()
-                    st.success("✅ Profile picture saved!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error saving profile picture: {str(e)}")
+                if not is_valid_image_url(image_url):
+                    st.warning("Please enter a valid public image URL (http/https, image content).")
+                else:
+                    try:
+                        supabase.table("users").update({
+                            "profile_image_url": image_url.strip()
+                        }).eq("u_email", normalized_email).execute()
+                        st.success("✅ Profile picture saved!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error saving profile picture: {str(e)}")
             else:
                 st.warning("Please enter a valid URL")
     
@@ -1908,7 +1944,9 @@ def show_topbar():
 # -------------------------------
 with st.sidebar:
     st.markdown("<div class='sb-brand'>Credify</div>", unsafe_allow_html=True)
-    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Settings"], index=1)
+    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Notifications", "Settings"], index=1)
+    st.divider()
+    logout_button()
 
 apply_theme()
 
