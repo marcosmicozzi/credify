@@ -892,7 +892,7 @@ def show_profile():
         </style>
     """, unsafe_allow_html=True)
     
-    # Metrics displayed in centered compact layout
+    # Metrics displayed in centered compact layout (combined across platforms)
     metric_html = f"""
         <div class="profile-metrics-container">
             <div class="profile-metric-item">
@@ -911,6 +911,46 @@ def show_profile():
     """
     st.markdown(metric_html, unsafe_allow_html=True)
     
+    # Platform sections (YouTube / Instagram / TikTok)
+    # Prepare per-platform totals; currently only YouTube live metrics exist
+    youtube_totals = {
+        "views": display_metrics["total_view_count"],
+        "likes": display_metrics["total_like_count"],
+        "comments": display_metrics["total_comment_count"],
+    }
+    instagram_totals = {"views": 0, "likes": 0, "comments": 0}
+    tiktok_totals = {"views": 0, "likes": 0, "comments": 0}
+
+    st.markdown("### Platforms")
+    col_y, col_i, col_t = st.columns(3)
+    with col_y:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("**YouTube**")
+        st.caption(f"Views: {youtube_totals['views']:,} | Likes: {youtube_totals['likes']:,} | Comments: {youtube_totals['comments']:,}")
+        if st.button("Open YouTube Analytics", key="btn_youtube", use_container_width=True):
+            st.session_state["selected_platform"] = "youtube"
+            st.session_state["page_override"] = "Analytics"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_i:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("**Instagram**")
+        st.caption(f"Views: {instagram_totals['views']:,} | Likes: {instagram_totals['likes']:,} | Comments: {instagram_totals['comments']:,}")
+        if st.button("Open Instagram Analytics", key="btn_instagram", use_container_width=True):
+            st.session_state["selected_platform"] = "instagram"
+            st.session_state["page_override"] = "Analytics"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_t:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("**TikTok**")
+        st.caption(f"Views: {tiktok_totals['views']:,} | Likes: {tiktok_totals['likes']:,} | Comments: {tiktok_totals['comments']:,}")
+        if st.button("Open TikTok Analytics", key="btn_tiktok", use_container_width=True):
+            st.session_state["selected_platform"] = "tiktok"
+            st.session_state["page_override"] = "Analytics"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
     # Refresh button below metrics (perfectly centered using columns)
     disabled = remaining > 0
     label = "Refresh" if not disabled else f"{remaining}s"
@@ -1355,8 +1395,12 @@ def show_notifications_page():
 # PAGE 4 — SETTINGS
 # -------------------------------
 def show_analytics_page():
-    st.title("Analytics")
-    st.caption("Daily totals across all your credited videos (views, likes, comments).")
+    platform = st.session_state.get("selected_platform", "youtube")
+    st.title(f"{platform.capitalize()} Analytics")
+    if platform != "youtube":
+        st.info("Platform analytics coming soon.")
+        return
+    st.caption("Daily totals across your YouTube credits (views, likes, comments).")
 
     # Identify user id
     user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
