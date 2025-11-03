@@ -936,18 +936,18 @@ def show_profile():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("**Instagram**")
         st.caption(f"Views: {instagram_totals['views']:,} | Likes: {instagram_totals['likes']:,} | Comments: {instagram_totals['comments']:,}")
-        if st.button("Open Instagram Analytics", key="btn_instagram", use_container_width=True):
+        if st.button("Open Instagram Overview", key="btn_instagram", use_container_width=True):
             st.session_state["selected_platform"] = "instagram"
-            st.session_state["page_override"] = "Analytics"
+            st.session_state["page_override"] = "Instagram"
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
     with col_t:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("**TikTok**")
         st.caption(f"Views: {tiktok_totals['views']:,} | Likes: {tiktok_totals['likes']:,} | Comments: {tiktok_totals['comments']:,}")
-        if st.button("Open TikTok Analytics", key="btn_tiktok", use_container_width=True):
+        if st.button("Open TikTok Overview", key="btn_tiktok", use_container_width=True):
             st.session_state["selected_platform"] = "tiktok"
-            st.session_state["page_override"] = "Analytics"
+            st.session_state["page_override"] = "TikTok"
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -989,101 +989,7 @@ def show_profile():
         render_add_credit_form()
         st.divider()
 
-    # Projects
-    st.markdown("### Your Credits")
-    projects_response = supabase.table("user_projects") \
-        .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
-        .eq("u_id", u_id).execute()
-
-    data = projects_response.data
-    if not data:
-        st.info("You haven’t been credited on any projects yet.")
-        return
-
-    # Aggregate roles
-    unique_projects = {}
-    for rec in data:
-        pid = rec["projects"]["p_id"]
-        role = rec["u_role"]
-        if pid not in unique_projects:
-            unique_projects[pid] = {"project": rec["projects"], "roles": [role]}
-        else:
-            unique_projects[pid]["roles"].append(role)
-
-    # Sort by views (batch metrics fetch to avoid N+1)
-    pids = list(unique_projects.keys())
-    metrics_map = {}
-    if pids:
-        # Try youtube_latest_metrics first (preferred for real-time), fall back to youtube_metrics if table doesn't exist
-        try:
-            metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
-            for m in (metrics_resp.data or []):
-                pid = m["p_id"]
-                metrics_map[pid] = {
-                    "view_count": m.get("view_count", 0) or 0,
-                    "like_count": m.get("like_count", 0) or 0,
-                    "comment_count": m.get("comment_count", 0) or 0,
-                }
-        except Exception:
-            # Fallback: query youtube_metrics and get the latest entry per project
-            metrics_resp = supabase.table("youtube_metrics").select("p_id, view_count, like_count, comment_count, fetched_at").in_("p_id", pids).order("fetched_at", desc=True).execute()
-            seen_pids = set()
-            for m in (metrics_resp.data or []):
-                pid = m["p_id"]
-                if pid not in seen_pids:
-                    metrics_map[pid] = {
-                        "view_count": m.get("view_count", 0) or 0,
-                        "like_count": m.get("like_count", 0) or 0,
-                        "comment_count": m.get("comment_count", 0) or 0,
-                    }
-                    seen_pids.add(pid)
-
-    sorted_projects = []
-    for pid, rec in unique_projects.items():
-        rec_metrics = metrics_map.get(pid, {"view_count": 0, "like_count": 0, "comment_count": 0})
-        rec["views"] = rec_metrics["view_count"]
-        rec["metrics"] = rec_metrics
-        sorted_projects.append(rec)
-    sorted_projects = sorted(sorted_projects, key=lambda x: x["views"], reverse=True)
-
-    # Display
-    cols = st.columns(3)
-    for i, rec in enumerate(sorted_projects):
-        proj = rec["project"]
-        roles = ", ".join(rec["roles"])
-        with cols[i % 3]:
-            st.markdown("<div class='project-card'>", unsafe_allow_html=True)
-            # Handle missing thumbnail gracefully
-            if proj.get("p_thumbnail_url"):
-                st.image(proj["p_thumbnail_url"], use_container_width=True)
-            else:
-                st.info("No thumbnail available")
-            st.markdown(f"**[{escape(proj['p_title'])}]({proj['p_link']})**  \n*{escape(roles)}*")
-            m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
-            st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    # Collaborators (YouTube channels) section
-    try:
-        st.markdown("### Collaborators")
-        # Use previously computed list of pids for this user
-        channel_map = fetch_channels_for_projects(pids)
-        if not channel_map:
-            st.info("No collaborators detected yet.")
-            return
-
-        # Sort channels by title
-        channels_sorted = sorted(channel_map.items(), key=lambda x: x[1]["title"].lower())
-
-        cols = st.columns(4)
-        for idx, (ch_id, ch) in enumerate(channels_sorted):
-            with cols[idx % 4]:
-                st.markdown("<div class='card'>", unsafe_allow_html=True)
-                st.markdown(f"**[{escape(ch['title'])}]({ch['url']})**")
-                st.markdown("</div>", unsafe_allow_html=True)
-    except Exception:
-        # Render failures should not crash Profile
-        pass
+    # Credits and collaborators have moved to the platform pages
 
 def render_add_credit_form():
     """Inline claim form reused inside Profile."""
@@ -1581,6 +1487,77 @@ def show_youtube_overview():
                 st.markdown("</div>", unsafe_allow_html=True)
     except Exception:
         pass
+
+# -------------------------------
+# PLATFORM PAGES — INSTAGRAM & TIKTOK (placeholders until data exists)
+# -------------------------------
+def _show_generic_platform_overview(platform_key: str, platform_label: str):
+    st.session_state["selected_platform"] = platform_key
+
+    user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
+    if not user_res.data:
+        st.info("No profile found yet — one will be created after your first claim.")
+        return
+    user = user_res.data[0]
+
+    profile_image_url = user.get("profile_image_url")
+    avatar_url = profile_image_url if profile_image_url else f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
+    st.markdown(f"""
+        <div style=\"text-align: center; margin-bottom: 24px;\">
+            <img src=\"{avatar_url}\" 
+                 style=\"width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateX(-12px);\" />
+        </div>
+    """, unsafe_allow_html=True)
+
+    sanitized_name = sanitize_user_input(user.get('u_name', ''))
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{sanitized_name}</h1>", unsafe_allow_html=True)
+    if user.get("u_bio"):
+        sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 4px; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
+
+    # Placeholder totals until platform integrations land
+    views = 0
+    likes = 0
+    comments = 0
+
+    st.markdown(f"""
+        <div class=\"profile-metrics-container\">
+            <div class=\"profile-metric-item\">
+                <div style=\"font-size: 12px; color: #666; margin-bottom: 4px;\">Views</div>
+                <div style=\"font-size: 20px; font-weight: 700;\">{views:,}</div>
+            </div>
+            <div class=\"profile-metric-item\">
+                <div style=\"font-size: 12px; color: #666; margin-bottom: 4px;\">Likes</div>
+                <div style=\"font-size: 20px; font-weight: 700;\">{likes:,}</div>
+            </div>
+            <div class=\"profile-metric-item\">
+                <div style=\"font-size: 12px; color: #666; margin-bottom: 4px;\">Comments</div>
+                <div style=\"font-size: 20px; font-weight: 700;\">{comments:,}</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Actions: View Analytics
+    actions_col1, actions_col2, actions_col3 = st.columns([1, 2, 1])
+    with actions_col2:
+        if st.button("View Analytics", key=f"btn_view_{platform_key}_analytics", use_container_width=True):
+            st.session_state["selected_platform"] = platform_key
+            st.session_state["page_override"] = "Analytics"
+            st.rerun()
+
+    st.divider()
+    st.markdown(f"### Your {platform_label} Credits")
+    st.info(f"No {platform_label} credits yet.")
+    st.markdown(f"### {platform_label} Collaborators")
+    st.info(f"No {platform_label} collaborators detected yet.")
+
+
+def show_instagram_overview():
+    _show_generic_platform_overview("instagram", "Instagram")
+
+
+def show_tiktok_overview():
+    _show_generic_platform_overview("tiktok", "TikTok")
 
 # -------------------------------
 # PAGE 4 — SETTINGS
@@ -2179,7 +2156,7 @@ def show_topbar():
 # -------------------------------
 with st.sidebar:
     st.markdown("<div class='sb-brand'>Credify</div>", unsafe_allow_html=True)
-    page = st.radio("Navigate to:", ["Home", "Profile", "YouTube", "Analytics", "Notifications", "Settings"], index=1)
+    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Notifications", "Settings"], index=1)
     st.divider()
     logout_button()
 
@@ -2202,6 +2179,10 @@ elif page == "Profile":
     show_profile()
 elif page == "YouTube":
     show_youtube_overview()
+elif page == "Instagram":
+    show_instagram_overview()
+elif page == "TikTok":
+    show_tiktok_overview()
 elif page == "Analytics":
     show_analytics_page()
 elif page == "Notifications":
