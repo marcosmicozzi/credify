@@ -921,35 +921,30 @@ def show_profile():
     instagram_totals = {"views": 0, "likes": 0, "comments": 0}
     tiktok_totals = {"views": 0, "likes": 0, "comments": 0}
 
+    # Platform sections (matching Analytics button style)
     st.markdown("### Platforms")
-    col_y, col_i, col_t = st.columns(3)
-    with col_y:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("**YouTube**")
+    btn_cols = st.columns(3)
+    with btn_cols[0]:
+        st.markdown(f"**YouTube**")
         st.caption(f"Views: {youtube_totals['views']:,} | Likes: {youtube_totals['likes']:,} | Comments: {youtube_totals['comments']:,}")
         if st.button("Open YouTube Overview", key="btn_youtube", use_container_width=True):
             st.session_state["selected_platform"] = "youtube"
             st.session_state["page_override"] = "YouTube"
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-    with col_i:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("**Instagram**")
+    with btn_cols[1]:
+        st.markdown(f"**Instagram**")
         st.caption(f"Views: {instagram_totals['views']:,} | Likes: {instagram_totals['likes']:,} | Comments: {instagram_totals['comments']:,}")
         if st.button("Open Instagram Overview", key="btn_instagram", use_container_width=True):
             st.session_state["selected_platform"] = "instagram"
             st.session_state["page_override"] = "Instagram"
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-    with col_t:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("**TikTok**")
+    with btn_cols[2]:
+        st.markdown(f"**TikTok**")
         st.caption(f"Views: {tiktok_totals['views']:,} | Likes: {tiktok_totals['likes']:,} | Comments: {tiktok_totals['comments']:,}")
         if st.button("Open TikTok Overview", key="btn_tiktok", use_container_width=True):
             st.session_state["selected_platform"] = "tiktok"
             st.session_state["page_override"] = "TikTok"
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
 
     # Refresh button below metrics (perfectly centered using columns)
     disabled = remaining > 0
