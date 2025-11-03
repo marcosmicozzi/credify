@@ -926,26 +926,23 @@ def show_profile():
     btn_cols = st.columns(3)
     with btn_cols[0]:
         st.markdown(f"**YouTube**")
-        st.caption(f"Views: {youtube_totals['views']:,} | Likes: {youtube_totals['likes']:,} | Comments: {youtube_totals['comments']:,}")
-        if st.button("Open YouTube Overview", key="btn_youtube", use_container_width=True):
+        if st.button("YouTube Overview", key="btn_youtube", use_container_width=True):
             st.session_state["selected_platform"] = "youtube"
             st.session_state["page_override"] = "YouTube"
             st.rerun()
     with btn_cols[1]:
         st.markdown(f"**Instagram**")
-        st.caption(f"Views: {instagram_totals['views']:,} | Likes: {instagram_totals['likes']:,} | Comments: {instagram_totals['comments']:,}")
-        if st.button("Open Instagram Overview", key="btn_instagram", use_container_width=True):
+        if st.button("Instagram Overview", key="btn_instagram", use_container_width=True):
             st.session_state["selected_platform"] = "instagram"
             st.session_state["page_override"] = "Instagram"
             st.rerun()
     with btn_cols[2]:
         st.markdown(f"**TikTok**")
-        st.caption(f"Views: {tiktok_totals['views']:,} | Likes: {tiktok_totals['likes']:,} | Comments: {tiktok_totals['comments']:,}")
-        if st.button("Open TikTok Overview", key="btn_tiktok", use_container_width=True):
+        if st.button("TikTok Overview", key="btn_tiktok", use_container_width=True):
             st.session_state["selected_platform"] = "tiktok"
             st.session_state["page_override"] = "TikTok"
             st.rerun()
-
+    
     # Refresh button below metrics (perfectly centered using columns)
     disabled = remaining > 0
     label = "Refresh" if not disabled else f"{remaining}s"
@@ -1013,7 +1010,7 @@ def render_add_credit_form():
         if role_entry not in st.session_state.selected_roles:
             st.session_state.selected_roles.append(role_entry)
         else:
-            st.warning("You’ve already added this role.")
+            st.warning("You've already added this role.")
 
     if st.session_state.selected_roles:
         st.markdown("**Added roles:**")
@@ -1413,7 +1410,7 @@ def show_youtube_overview():
 
     data = projects_response.data
     if not data:
-        st.info("You haven’t been credited on any projects yet.")
+        st.info("You haven't been credited on any projects yet.")
         return
 
     unique_projects = {}
