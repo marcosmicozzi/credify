@@ -1318,9 +1318,9 @@ def show_youtube_overview():
     else:
         avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
     st.markdown(f"""
-        <div style="text-align: center; margin-bottom: 24px;">
-            <img src="{avatar_url}" 
-                 style="width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateX(-12px);" />
+        <div style=\"text-align: center; margin-bottom: 24px;\">
+            <img src=\"{avatar_url}\" 
+                 style=\"width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateX(-12px);\" />
         </div>
     """, unsafe_allow_html=True)
 
@@ -1330,6 +1330,30 @@ def show_youtube_overview():
     if user.get("u_bio"):
         sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
         st.markdown(f"<p style='text-align: center; color: #666; margin-top: 4px; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
+
+    # Metrics style (match Profile centering)
+    st.markdown(f"""
+        <style>
+        .profile-metrics-container {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 50px;
+            margin: 16px 0 20px 0;
+            flex-wrap: wrap;
+        }}
+        .profile-metric-item {{
+            text-align: center;
+            min-width: 60px;
+        }}
+        @media (max-width: 768px) {{
+            .profile-metrics-container {{ gap: 30px; }}
+        }}
+        @media (max-width: 480px) {{
+            .profile-metrics-container {{ gap: 20px; }}
+        }}
+        </style>
+    """, unsafe_allow_html=True)
 
     # Live metrics (YouTube only)
     if "live_metrics" not in st.session_state:
@@ -1520,6 +1544,30 @@ def _show_generic_platform_overview(platform_key: str, platform_label: str):
     if user.get("u_bio"):
         sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
         st.markdown(f"<p style='text-align: center; color: #666; margin-top: 4px; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
+
+    # Metrics style (match Profile centering)
+    st.markdown(f"""
+        <style>
+        .profile-metrics-container {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 50px;
+            margin: 16px 0 20px 0;
+            flex-wrap: wrap;
+        }}
+        .profile-metric-item {{
+            text-align: center;
+            min-width: 60px;
+        }}
+        @media (max-width: 768px) {{
+            .profile-metrics-container {{ gap: 30px; }}
+        }}
+        @media (max-width: 480px) {{
+            .profile-metrics-container {{ gap: 20px; }}
+        }}
+        </style>
+    """, unsafe_allow_html=True)
 
     # Placeholder totals until platform integrations land
     views = 0
