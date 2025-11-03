@@ -921,6 +921,27 @@ def show_profile():
     instagram_totals = {"views": 0, "likes": 0, "comments": 0}
     tiktok_totals = {"views": 0, "likes": 0, "comments": 0}
 
+    # Refresh button below metrics (perfectly centered using columns)
+    disabled = remaining > 0
+    label = "Refresh" if not disabled else f"{remaining}s"
+    
+    # Wrap in a container for styling
+    st.markdown('<div class="profile-refresh-section">', unsafe_allow_html=True)
+    # Use columns to center the button perfectly
+    refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 2, 1])
+    with refresh_col2:
+        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
+            with st.spinner("Fetching latest metrics from YouTube..."):
+                live_data = fetch_live_metrics_for_user(u_id)
+            if live_data:
+                st.session_state.live_metrics = live_data
+                st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
+                st.success(f"Fetched latest metrics for {len(live_data)} videos")
+                st.rerun()
+            else:
+                st.warning("Could not fetch live metrics right now.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
     # Platform sections (matching Analytics button style)
     st.markdown("### Platforms")
     btn_cols = st.columns(3)
@@ -943,27 +964,6 @@ def show_profile():
             st.session_state["page_override"] = "TikTok"
             st.rerun()
     
-    # Refresh button below metrics (perfectly centered using columns)
-    disabled = remaining > 0
-    label = "Refresh" if not disabled else f"{remaining}s"
-    
-    # Wrap in a container for styling
-    st.markdown('<div class="profile-refresh-section">', unsafe_allow_html=True)
-    # Use columns to center the button perfectly
-    refresh_col1, refresh_col2, refresh_col3 = st.columns([1, 2, 1])
-    with refresh_col2:
-        if st.button(label, key="live_refresh_btn", disabled=disabled, use_container_width=True):
-            with st.spinner("Fetching latest metrics from YouTube..."):
-                live_data = fetch_live_metrics_for_user(u_id)
-            if live_data:
-                st.session_state.live_metrics = live_data
-                st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
-                st.success(f"Fetched latest metrics for {len(live_data)} videos")
-                st.rerun()
-            else:
-                st.warning("Could not fetch live metrics right now.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
     st.divider()
 
     # Add Credit entry point (opens inline section)
