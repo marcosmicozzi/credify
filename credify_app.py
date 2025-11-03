@@ -927,9 +927,9 @@ def show_profile():
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("**YouTube**")
         st.caption(f"Views: {youtube_totals['views']:,} | Likes: {youtube_totals['likes']:,} | Comments: {youtube_totals['comments']:,}")
-        if st.button("Open YouTube Analytics", key="btn_youtube", use_container_width=True):
+        if st.button("Open YouTube Overview", key="btn_youtube", use_container_width=True):
             st.session_state["selected_platform"] = "youtube"
-            st.session_state["page_override"] = "Analytics"
+            st.session_state["page_override"] = "YouTube"
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
     with col_i:
@@ -1390,6 +1390,197 @@ def show_notifications_page():
         title = it.get("projects", {}).get("p_title", "Project")
         role = it.get("u_role", "Role")
         st.write(f"✅ Credit accepted: {role} on {title}")
+
+# -------------------------------
+# PAGE 2 — YOUTUBE OVERVIEW
+# -------------------------------
+def show_youtube_overview():
+    # Ensure platform context
+    st.session_state["selected_platform"] = "youtube"
+
+    # Get user info
+    user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
+    if not user_res.data:
+        st.info("No profile found yet — one will be created after your first claim.")
+        return
+    user = user_res.data[0]
+    u_id = user["u_id"]
+
+    # Header: profile image
+    profile_image_url = user.get("profile_image_url")
+    if profile_image_url:
+        avatar_url = profile_image_url
+    else:
+        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
+    st.markdown(f"""
+        <div style="text-align: center; margin-bottom: 24px;">
+            <img src="{avatar_url}" 
+                 style="width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateX(-12px);" />
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Name and Bio
+    sanitized_name = sanitize_user_input(user.get('u_name', ''))
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{sanitized_name}</h1>", unsafe_allow_html=True)
+    if user.get("u_bio"):
+        sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 4px; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
+
+    # Live metrics (YouTube only)
+    if "live_metrics" not in st.session_state:
+        st.session_state.live_metrics = None
+    if st.session_state.live_metrics is None:
+        with st.spinner("Fetching live metrics..."):
+            live_data = fetch_live_metrics_for_user(u_id)
+            if live_data:
+                st.session_state.live_metrics = live_data
+
+    # Cooldown for refresh
+    cooldown_seconds = 300
+    ss_key = "user_refresh_cooldown"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = 0
+    last_ts = st.session_state[ss_key]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    remaining = max(0, int(cooldown_seconds - (now_ts - last_ts)))
+
+    # Aggregate YouTube totals
+    if st.session_state.live_metrics:
+        live_total_views = sum(m["view_count"] for m in st.session_state.live_metrics.values())
+        live_total_likes = sum(m["like_count"] for m in st.session_state.live_metrics.values())
+        live_total_comments = sum(m["comment_count"] for m in st.session_state.live_metrics.values())
+    else:
+        live_total_views = 0
+        live_total_likes = 0
+        live_total_comments = 0
+
+    # Metrics row
+    st.markdown(f"""
+        <div class="profile-metrics-container">
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Views</div>
+                <div style="font-size: 20px; font-weight: 700;">{live_total_views:,}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Likes</div>
+                <div style="font-size: 20px; font-weight: 700;">{live_total_likes:,}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Comments</div>
+                <div style="font-size: 20px; font-weight: 700;">{live_total_comments:,}</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Refresh + View Analytics actions
+    actions_col1, actions_col2, actions_col3 = st.columns([1, 2, 1])
+    with actions_col2:
+        act_cols = st.columns(2)
+        with act_cols[0]:
+            disabled = remaining > 0
+            label = "Refresh" if not disabled else f"{remaining}s"
+            if st.button(label, key="yt_live_refresh_btn", disabled=disabled, use_container_width=True):
+                with st.spinner("Fetching latest metrics from YouTube..."):
+                    live_data = fetch_live_metrics_for_user(u_id)
+                if live_data:
+                    st.session_state.live_metrics = live_data
+                    st.session_state[ss_key] = datetime.now(timezone.utc).timestamp()
+                    st.success(f"Fetched latest metrics for {len(live_data)} videos")
+                    st.rerun()
+                else:
+                    st.warning("Could not fetch live metrics right now.")
+        with act_cols[1]:
+            if st.button("View Analytics", key="btn_view_yt_analytics", use_container_width=True):
+                st.session_state["selected_platform"] = "youtube"
+                st.session_state["page_override"] = "Analytics"
+                st.rerun()
+
+    st.divider()
+
+    # Videos list (Your Credits)
+    st.markdown("### Your Videos")
+    projects_response = supabase.table("user_projects") \
+        .select("projects(p_id, p_title, p_link, p_thumbnail_url), u_role") \
+        .eq("u_id", u_id).execute()
+
+    data = projects_response.data
+    if not data:
+        st.info("You haven’t been credited on any projects yet.")
+        return
+
+    unique_projects = {}
+    for rec in data:
+        pid = rec["projects"]["p_id"]
+        role = rec["u_role"]
+        if pid not in unique_projects:
+            unique_projects[pid] = {"project": rec["projects"], "roles": [role]}
+        else:
+            unique_projects[pid]["roles"].append(role)
+
+    pids = list(unique_projects.keys())
+    metrics_map = {}
+    if pids:
+        try:
+            metrics_resp = supabase.table("youtube_latest_metrics").select("p_id, view_count, like_count, comment_count").in_("p_id", pids).execute()
+            for m in (metrics_resp.data or []):
+                pid = m["p_id"]
+                metrics_map[pid] = {
+                    "view_count": m.get("view_count", 0) or 0,
+                    "like_count": m.get("like_count", 0) or 0,
+                    "comment_count": m.get("comment_count", 0) or 0,
+                }
+        except Exception:
+            metrics_resp = supabase.table("youtube_metrics").select("p_id, view_count, like_count, comment_count, fetched_at").in_("p_id", pids).order("fetched_at", desc=True).execute()
+            seen_pids = set()
+            for m in (metrics_resp.data or []):
+                pid = m["p_id"]
+                if pid not in seen_pids:
+                    metrics_map[pid] = {
+                        "view_count": m.get("view_count", 0) or 0,
+                        "like_count": m.get("like_count", 0) or 0,
+                        "comment_count": m.get("comment_count", 0) or 0,
+                    }
+                    seen_pids.add(pid)
+
+    sorted_projects = []
+    for pid, rec in unique_projects.items():
+        rec_metrics = metrics_map.get(pid, {"view_count": 0, "like_count": 0, "comment_count": 0})
+        rec["views"] = rec_metrics["view_count"]
+        rec["metrics"] = rec_metrics
+        sorted_projects.append(rec)
+    sorted_projects = sorted(sorted_projects, key=lambda x: x["views"], reverse=True)
+
+    cols = st.columns(3)
+    for i, rec in enumerate(sorted_projects):
+        proj = rec["project"]
+        roles = ", ".join(rec["roles"])
+        with cols[i % 3]:
+            st.markdown("<div class='project-card'>", unsafe_allow_html=True)
+            if proj.get("p_thumbnail_url"):
+                st.image(proj["p_thumbnail_url"], use_container_width=True)
+            else:
+                st.info("No thumbnail available")
+            st.markdown(f"**[{escape(proj['p_title'])}]({proj['p_link']})**  \n*{escape(roles)}*")
+            m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
+            st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # Collaborators
+    try:
+        st.markdown("### Collaborators")
+        channel_map = fetch_channels_for_projects(pids)
+        if not channel_map:
+            st.info("No collaborators detected yet.")
+            return
+        channels_sorted = sorted(channel_map.items(), key=lambda x: x[1]["title"].lower())
+        cols = st.columns(4)
+        for idx, (ch_id, ch) in enumerate(channels_sorted):
+            with cols[idx % 4]:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown(f"**[{escape(ch['title'])}]({ch['url']})**")
+                st.markdown("</div>", unsafe_allow_html=True)
+    except Exception:
+        pass
 
 # -------------------------------
 # PAGE 4 — SETTINGS
@@ -1988,7 +2179,7 @@ def show_topbar():
 # -------------------------------
 with st.sidebar:
     st.markdown("<div class='sb-brand'>Credify</div>", unsafe_allow_html=True)
-    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Notifications", "Settings"], index=1)
+    page = st.radio("Navigate to:", ["Home", "Profile", "YouTube", "Analytics", "Notifications", "Settings"], index=1)
     st.divider()
     logout_button()
 
@@ -2009,6 +2200,8 @@ if page == "Home":
     show_home_page()
 elif page == "Profile":
     show_profile()
+elif page == "YouTube":
+    show_youtube_overview()
 elif page == "Analytics":
     show_analytics_page()
 elif page == "Notifications":
