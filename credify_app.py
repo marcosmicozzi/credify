@@ -1602,7 +1602,7 @@ def show_analytics_page():
     # Controls: range only (daily metrics)
     col_a, col_b = st.columns([1, 2])
     with col_a:
-        preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months"], index=2)
+        preset = st.radio("Range", ["Last 7 days", "Last 28 days", "Last 12 months"], index=0)
     with col_b:
         today = datetime.now(timezone.utc).date()
         yesterday = today - timedelta(days=1)  # Exclude today since metrics are gathered each morning
