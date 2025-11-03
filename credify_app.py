@@ -1635,7 +1635,7 @@ def show_analytics_page():
                 ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
     
     # Debug info (temporary)
-    if ts_df.empty and any_metrics_check.data:
+    if ts_df_youtube.empty and any_metrics_check.data:
         with st.expander("🔍 Debug Info (click to expand)", expanded=False):
             st.write(f"**User ID:** {u_id}")
             st.write(f"**Linked Projects:** {project_ids}")
@@ -1959,8 +1959,8 @@ def show_analytics_page():
     )
 
     # Peak day for selected metric
-    if not ts_df.empty and ts_df[metric_col].max() > 0:
-        peak_row = ts_df.loc[ts_df[metric_col].idxmax()]
+    if not ts_df_youtube.empty and ts_df_youtube[metric_col].max() > 0:
+        peak_row = ts_df_youtube.loc[ts_df_youtube[metric_col].idxmax()]
         peak_date = peak_row["date"].date()
         peak_value = int(peak_row[metric_col])
         st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
