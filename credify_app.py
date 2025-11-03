@@ -1563,12 +1563,28 @@ def show_tiktok_overview():
 # PAGE 4 — SETTINGS
 # -------------------------------
 def show_analytics_page():
+    # Determine view mode: overall dashboard or platform detail
+    if "analytics_view" not in st.session_state:
+        st.session_state.analytics_view = "overall"
+    analytics_view = st.session_state.get("analytics_view", "overall")
     platform = st.session_state.get("selected_platform", "youtube")
-    st.title(f"{platform.capitalize()} Analytics")
-    if platform != "youtube":
-        st.info("Platform analytics coming soon.")
-        return
-    st.caption("Daily totals across your YouTube credits (views, likes, comments).")
+
+    # Header
+    if analytics_view == "overall":
+        st.title("Analytics")
+        st.caption("Combined overview across all connected platforms.")
+    else:
+        st.title(f"{platform.capitalize()} Analytics")
+        # Back to overview
+        back_cols = st.columns([1, 2, 1])
+        with back_cols[0]:
+            if st.button("← Back to Overview", key="btn_back_overview"):
+                st.session_state.analytics_view = "overall"
+                st.rerun()
+        if platform != "youtube":
+            st.info("Platform analytics coming soon.")
+            return
+        st.caption("Daily totals across your YouTube credits (views, likes, comments).")
 
     # Identify user id
     user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
@@ -1594,7 +1610,7 @@ def show_analytics_page():
             start_date = today - timedelta(days=365)  # Full year
             end_date = yesterday
 
-    # Fetch data
+    # Fetch data (used by both overview and YouTube detail)
     start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     end_iso = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
     
@@ -1611,13 +1627,12 @@ def show_analytics_page():
         .execute()
     
     with st.spinner("Loading analytics..."):
-        ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
-        # Fallback: if no rows, try going back one more day (in case yesterday also has no data)
-        if ts_df.empty:
+        ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
+        if ts_df_youtube.empty:
             end_date_fallback = end_date - timedelta(days=1)
             if end_date_fallback >= start_date:
                 end_iso_fb = datetime.combine(end_date_fallback, datetime.max.time(), tzinfo=timezone.utc).isoformat()
-                ts_df = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
+                ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
     
     # Debug info (temporary)
     if ts_df.empty and any_metrics_check.data:
@@ -1629,7 +1644,7 @@ def show_analytics_page():
             for m in any_metrics_check.data:
                 st.write(f"  - {m['p_id']}: {m.get('fetched_at', 'N/A')} ({m.get('view_count', 0)} views)")
 
-    if ts_df.empty:
+    if ts_df_youtube.empty:
         if not project_ids:
             st.info("No projects linked to your account yet. Add credits to get started.")
             return
@@ -1665,7 +1680,7 @@ def show_analytics_page():
         return
     
     # Check if all values are zero (which might indicate a calculation issue)
-    if not ts_df.empty and ts_df[["views", "likes", "comments"]].sum().sum() == 0:
+    if not ts_df_youtube.empty and ts_df_youtube[["views", "likes", "comments"]].sum().sum() == 0:
         # This means we have data in the date range, but all increments calculated to 0
         # This can happen if there's only one snapshot per video (can't calculate diff)
         # or if all snapshots have the same values
@@ -1673,7 +1688,7 @@ def show_analytics_page():
 
     # Inform when data appears too sparse
     num_days = (end_date - start_date).days + 1
-    if num_days >= 7 and (ts_df[["views", "likes", "comments"]].sum().sum() == 0):
+    if num_days >= 7 and (ts_df_youtube[["views", "likes", "comments"]].sum().sum() == 0):
         st.warning("We have a limited dataset right now; charts may look flat until more days pass.")
 
     # Metric definitions
@@ -1688,8 +1703,30 @@ def show_analytics_page():
     if "selected_analytics_metric" not in st.session_state:
         st.session_state.selected_analytics_metric = "Views"
     
-    # Calculate totals for all metrics
-    metric_totals = {m: int(ts_df[metric_map[m]].sum()) for m in metric_options}
+    # OVERALL VIEW: show combined totals (currently YouTube-only until other platforms exist)
+    if analytics_view == "overall":
+        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) for m in metric_options}
+        # Buttons to open platform-specific analytics
+        st.markdown("### Platform Analytics")
+        btn_cols = st.columns(3)
+        with btn_cols[0]:
+            if st.button("YouTube Analytics", key="btn_open_youtube_analytics", use_container_width=True):
+                st.session_state.selected_platform = "youtube"
+                st.session_state.analytics_view = "platform"
+                st.rerun()
+        with btn_cols[1]:
+            if st.button("Instagram Analytics", key="btn_open_instagram_analytics", use_container_width=True):
+                st.session_state.selected_platform = "instagram"
+                st.session_state.analytics_view = "platform"
+                st.rerun()
+        with btn_cols[2]:
+            if st.button("TikTok Analytics", key="btn_open_tiktok_analytics", use_container_width=True):
+                st.session_state.selected_platform = "tiktok"
+                st.session_state.analytics_view = "platform"
+                st.rerun()
+    else:
+        # PLATFORM DETAIL (YouTube only for now)
+        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) for m in metric_options}
     
     # Two-tier layout: buttons (labels) on top, value cards below
     st.markdown("""
@@ -1838,8 +1875,8 @@ def show_analytics_page():
     metric_col = metric_map[selected_metric]
     metric_sum = metric_totals[selected_metric]
 
-    # Chart: Spotify-style area chart with smooth line
-    chart_df = ts_df.set_index("date")[[metric_col]].rename(columns={metric_col: selected_metric.lower()})
+    # Chart: Spotify-style area chart with smooth line (uses combined = YouTube for now)
+    chart_df = ts_df_youtube.set_index("date")[[metric_col]].rename(columns={metric_col: selected_metric.lower()})
     
     # Apply smooth interpolation using rolling average for Spotify-like curves
     # Use a small window (3 days) to smooth without losing detail
