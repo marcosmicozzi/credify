@@ -1007,11 +1007,6 @@ def show_profile():
             with cols[idx % 4]:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown(f"**[{escape(ch['title'])}]({ch['url']})**")
-                # Action: prefill topbar search to help user connect on Credify
-                if st.button("Search on Credify", key=f"search_collab_{ch_id}", use_container_width=True):
-                    st.session_state.search_query = ch["title"]
-                    # Keep user on Profile; dropdown will open in the fixed topbar
-                    st.success("Search prefilled above.")
                 st.markdown("</div>", unsafe_allow_html=True)
     except Exception:
         # Render failures should not crash Profile
