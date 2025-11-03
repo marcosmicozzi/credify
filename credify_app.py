@@ -1304,6 +1304,13 @@ def show_youtube_overview():
     # Ensure platform context
     st.session_state["selected_platform"] = "youtube"
 
+    # Back to Profile Overview
+    back_cols = st.columns([1, 2, 1])
+    with back_cols[0]:
+        if st.button("← Back to Profile Overview", key="btn_back_profile_youtube"):
+            st.session_state["page_override"] = "Profile"
+            st.rerun()
+
     # Get user info
     user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
     if not user_res.data:
@@ -1493,6 +1500,13 @@ def show_youtube_overview():
 # -------------------------------
 def _show_generic_platform_overview(platform_key: str, platform_label: str):
     st.session_state["selected_platform"] = platform_key
+
+    # Back to Profile Overview
+    back_cols = st.columns([1, 2, 1])
+    with back_cols[0]:
+        if st.button("← Back to Profile Overview", key=f"btn_back_profile_{platform_key}"):
+            st.session_state["page_override"] = "Profile"
+            st.rerun()
 
     user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
     if not user_res.data:
