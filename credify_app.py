@@ -1465,7 +1465,7 @@ def show_youtube_overview():
                 st.image(proj["p_thumbnail_url"], use_container_width=True)
             else:
                 st.info("No thumbnail available")
-            st.markdown(f"**[{escape(proj['p_title'])}]({proj['p_link']})**  \n*{escape(roles)}*")
+            st.markdown(f"**[{escape(proj['p_title'])}]({proj['p_link']})**")
             m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
             st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
             st.markdown("</div>", unsafe_allow_html=True)
