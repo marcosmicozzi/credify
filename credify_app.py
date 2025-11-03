@@ -459,6 +459,44 @@ def fetch_live_metrics_for_user(u_id: str) -> dict[str, dict[str, int]] | None:
     
     return live_metrics if live_metrics else None
 
+
+@st.cache_data(show_spinner=False)
+def fetch_channels_for_projects(project_ids: list[str]) -> dict[str, dict[str, str]]:
+    """Return a map of YouTube channelId -> {title, url} for given video IDs.
+
+    This uses the YouTube Data API to fetch snippet info and extract channel IDs/titles.
+    """
+    if not project_ids:
+        return {}
+
+    channels: dict[str, dict[str, str]] = {}
+    batch_size = 50
+    for i in range(0, len(project_ids), batch_size):
+        batch_ids = project_ids[i:i + batch_size]
+        ids_comma = ",".join(batch_ids)
+        url = (
+            f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={ids_comma}&key={YOUTUBE_API_KEY}"
+        )
+        try:
+            res = requests.get(url, timeout=20)
+            if not res.ok:
+                continue
+            data = res.json()
+            for item in (data.get("items") or []):
+                snippet = item.get("snippet", {})
+                ch_id = snippet.get("channelId")
+                ch_title = snippet.get("channelTitle") or "Unknown Channel"
+                if ch_id and ch_id not in channels:
+                    channels[ch_id] = {
+                        "title": ch_title,
+                        "url": f"https://www.youtube.com/channel/{ch_id}",
+                    }
+        except Exception:
+            # Skip failures silently to avoid breaking the page
+            continue
+
+    return channels
+
 # -------------------------------
 # ANALYTICS HELPERS (daily time series)
 # -------------------------------
@@ -951,6 +989,33 @@ def show_profile():
             m = rec.get("metrics", {"view_count": 0, "like_count": 0, "comment_count": 0})
             st.caption(f"Views: {m['view_count']:,} | Likes: {m['like_count']:,} | Comments: {m['comment_count']:,}")
             st.markdown("</div>", unsafe_allow_html=True)
+
+    # Collaborators (YouTube channels) section
+    try:
+        st.markdown("### Collaborators")
+        # Use previously computed list of pids for this user
+        channel_map = fetch_channels_for_projects(pids)
+        if not channel_map:
+            st.info("No collaborators detected yet.")
+            return
+
+        # Sort channels by title
+        channels_sorted = sorted(channel_map.items(), key=lambda x: x[1]["title"].lower())
+
+        cols = st.columns(4)
+        for idx, (ch_id, ch) in enumerate(channels_sorted):
+            with cols[idx % 4]:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown(f"**[{escape(ch['title'])}]({ch['url']})**")
+                # Action: prefill topbar search to help user connect on Credify
+                if st.button("Search on Credify", key=f"search_collab_{ch_id}", use_container_width=True):
+                    st.session_state.search_query = ch["title"]
+                    # Keep user on Profile; dropdown will open in the fixed topbar
+                    st.success("Search prefilled above.")
+                st.markdown("</div>", unsafe_allow_html=True)
+    except Exception:
+        # Render failures should not crash Profile
+        pass
 
 def render_add_credit_form():
     """Inline claim form reused inside Profile."""
