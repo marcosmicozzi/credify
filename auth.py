@@ -10,32 +10,33 @@ def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
     
     Checks multiple indicators in priority order:
-    1. STREAMLIT_SHARING_BASE_URL is set (definitive production indicator - check FIRST)
-    2. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
-    3. HOSTNAME contains localhost or 127.0.0.1
+    1. STREAMLIT_SERVER_PORT is set (strong localhost indicator - check FIRST)
+    2. HOSTNAME contains localhost or 127.0.0.1
+    3. STREAMLIT_SHARING_BASE_URL is NOT set (production sets this)
     4. Default to True if uncertain (safer for token-based auth)
     
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
         Defaults to True if uncertain (safer for token-based auth).
     """
-    # 1. Check STREAMLIT_SHARING_BASE_URL FIRST (most reliable production indicator)
-    # This is ALWAYS set on Streamlit Cloud and NEVER set locally
-    # Must check this first to avoid false positives from other env vars
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return False  # Definitely production (Streamlit Cloud)
-    
-    # 2. Check STREAMLIT_SERVER_PORT (strong localhost indicator)
+    # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
     # This is set when running `streamlit run` locally
+    # Must check this first so localhost detection takes priority
     server_port = os.getenv("STREAMLIT_SERVER_PORT")
     if server_port is not None:
         return True
     
-    # 3. Check HOSTNAME for localhost indicators
+    # 2. Check HOSTNAME for localhost indicators
     hostname = (os.getenv("HOSTNAME", "") or "").lower()
     if "localhost" in hostname or "127.0.0.1" in hostname:
         return True
+    
+    # 3. Check if STREAMLIT_SHARING_BASE_URL is set (production indicator)
+    # If it's set, we're definitely on Streamlit Cloud (production)
+    # Only check this after confirming we're not on localhost
+    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
+    if sharing_url:
+        return False
     
     # 4. Default to localhost if uncertain (safer for token-based auth)
     # This handles cases where none of the indicators are present
@@ -603,32 +604,35 @@ def show_login():
             st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
         
         # Supabase OAuth with dynamic redirect URL
+        # Priority: Use options dict with redirect_to to explicitly override Site URL
+        # This ensures Supabase uses the correct redirect URL regardless of Site URL setting
         res = None
         last_error = None
         
-        # Format 1: redirect_to as top-level parameter (most likely correct format)
+        # Format 1: redirect_to in options (snake_case) - Standard Python client format
+        # This explicitly passes redirect_to, overriding the Supabase Site URL setting
         try:
             res = supabase.auth.sign_in_with_oauth({
                 "provider": "google",
-                "redirect_to": redirect_url
+                "options": {
+                    "redirect_to": redirect_url
+                }
             })
             if debug_mode:
-                st.success(f"✅ OAuth URL generated using redirect_to (top level)")
+                st.success(f"✅ OAuth URL generated using redirect_to in options (explicit override)")
         except (TypeError, KeyError, AttributeError, Exception) as e1:
             last_error = e1
-            # Format 2: redirect_to in options (snake_case) - some versions use this
+            # Format 2: redirect_to as top-level parameter (fallback for older versions)
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {
-                        "redirect_to": redirect_url
-                    }
+                    "redirect_to": redirect_url
                 })
                 if debug_mode:
-                    st.success(f"✅ OAuth URL generated using redirect_to (in options)")
+                    st.success(f"✅ OAuth URL generated using redirect_to (top level, fallback)")
             except (TypeError, KeyError, AttributeError, Exception) as e2:
                 last_error = e2
-                # Format 3: redirectTo in options (camelCase) - JS/TS style
+                # Format 3: redirectTo in options (camelCase) - JS/TS style fallback
                 try:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
@@ -637,7 +641,7 @@ def show_login():
                         }
                     })
                     if debug_mode:
-                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
+                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase, fallback)")
                 except (TypeError, KeyError, AttributeError, Exception) as e3:
                     last_error = e3
                     raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
