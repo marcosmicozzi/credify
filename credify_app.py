@@ -7,7 +7,7 @@ import json
 import plotly.graph_objects as go
 import plotly.express as px
 from html import escape
-from auth import show_login, logout_button, supabase as auth_supabase, get_redirect_url  # logout now handled in topbar menu
+from auth import show_login, logout_button, supabase as auth_supabase, get_redirect_url, is_localhost  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 from utils.instagram_fetcher import (
     fetch_and_store_instagram_insights,
@@ -130,9 +130,16 @@ user_email = user.email
 is_demo_user = user_email == "demo_user@example.com"
 oauth_just_completed = st.session_state.get("oauth_just_completed", False)
 
+# On localhost, be more lenient with session validation since cookies don't persist
+# We rely on stored tokens instead, which are restored in auth.py
+is_localhost_env = is_localhost()
+
 # Skip session validation for DemoUser and immediately after OAuth completion
 # OAuth completion flag prevents race condition where validation runs before Supabase session is ready
-if not is_demo_user and not oauth_just_completed:
+# On localhost, also skip validation if we have stored tokens (cookies won't work)
+has_stored_tokens = "supabase_access_token" in st.session_state and "supabase_refresh_token" in st.session_state
+
+if not is_demo_user and not oauth_just_completed and not (is_localhost_env and has_stored_tokens):
     # For real OAuth users, verify Supabase session is still valid
     try:
         # Try to get current user from Supabase to verify session

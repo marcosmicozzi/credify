@@ -45,14 +45,49 @@ if "supabase_client" not in st.session_state:
 
 supabase: Client = st.session_state.supabase_client
 
-# Restore session from stored tokens if available (for persistence across reruns)
-# This ensures OAuth sessions persist after Streamlit reruns
+# Helper to detect if we're on localhost
+# This is needed before get_redirect_url() is defined
+def is_localhost() -> bool:
+    """Detect if running on localhost (HTTP) vs production (HTTPS).
+    
+    Returns:
+        True if running on localhost, False if on production (Streamlit Cloud).
+        Defaults to True if uncertain (safer for token-based auth).
+    """
+    # Check if we're on Streamlit Cloud (production)
+    if os.getenv("STREAMLIT_SHARING_BASE_URL"):
+        return False
+    # Check environment variables
+    if os.getenv("STREAMLIT_SERVER_PORT") is not None:
+        return True
+    hostname = (os.getenv("HOSTNAME", "") or "").lower()
+    if "localhost" in hostname or "127.0.0.1" in hostname:
+        return True
+    # If no Streamlit Cloud indicators, assume localhost
+    return True  # Default to localhost if uncertain (safer for token-based auth)
+
 if "supabase_access_token" in st.session_state and "supabase_refresh_token" in st.session_state:
     try:
-        # Check if session is already active
-        current_session = supabase.auth.get_session()
-        if not current_session:
-            # No active session - restore from stored tokens
+        # On localhost, always restore from tokens (cookies won't work on HTTP)
+        # On production (HTTPS), check if session exists first, then restore if needed
+        is_localhost_env = is_localhost()
+        should_restore = False
+        
+        if is_localhost_env:
+            # Localhost: Always restore from tokens since cookies don't persist
+            should_restore = True
+        else:
+            # Production: Check if session exists first
+            try:
+                current_session = supabase.auth.get_session()
+                if not current_session:
+                    should_restore = True
+            except Exception:
+                # Session check failed - restore from tokens
+                should_restore = True
+        
+        if should_restore:
+            # Restore session from stored tokens
             try:
                 supabase.auth.set_session({
                     "access_token": st.session_state["supabase_access_token"],
@@ -64,11 +99,17 @@ if "supabase_access_token" in st.session_state and "supabase_refresh_token" in s
                     new_session = supabase.auth.refresh_session({
                         "refresh_token": st.session_state["supabase_refresh_token"]
                     })
-                    if new_session and hasattr(new_session, "access_token"):
-                        # Update stored access token
-                        st.session_state["supabase_access_token"] = new_session.access_token
+                    if new_session:
+                        # Extract and update stored tokens
+                        if hasattr(new_session, "access_token"):
+                            st.session_state["supabase_access_token"] = new_session.access_token
+                        elif isinstance(new_session, dict):
+                            st.session_state["supabase_access_token"] = new_session.get("access_token")
+                        
                         if hasattr(new_session, "refresh_token"):
                             st.session_state["supabase_refresh_token"] = new_session.refresh_token
+                        elif isinstance(new_session, dict):
+                            st.session_state["supabase_refresh_token"] = new_session.get("refresh_token")
                 except Exception:
                     # Refresh also failed - tokens are expired, clear them
                     if "supabase_access_token" in st.session_state:
@@ -76,7 +117,7 @@ if "supabase_access_token" in st.session_state and "supabase_refresh_token" in s
                     if "supabase_refresh_token" in st.session_state:
                         del st.session_state["supabase_refresh_token"]
     except Exception:
-        # Session check failed - try to restore anyway
+        # Session check/restore failed - try to restore anyway
         try:
             supabase.auth.set_session({
                 "access_token": st.session_state["supabase_access_token"],
@@ -488,6 +529,40 @@ def show_login():
             error_msg = str(e)
             # Check if it's a PKCE mismatch error or session expiration
             if "code challenge" in error_msg.lower() or "code verifier" in error_msg.lower() or "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+                # On localhost, this might be a false positive due to cookie issues
+                # Check if we have stored tokens - if so, try to use them instead
+                is_localhost_env = is_localhost()
+                
+                if is_localhost_env and "supabase_access_token" in st.session_state and "supabase_refresh_token" in st.session_state:
+                    # On localhost with stored tokens, try to restore session instead of showing error
+                    try:
+                        supabase.auth.set_session({
+                            "access_token": st.session_state["supabase_access_token"],
+                            "refresh_token": st.session_state["supabase_refresh_token"]
+                        })
+                        # If restore succeeds, try to get user
+                        user_response = supabase.auth.get_user()
+                        if user_response:
+                            user = None
+                            if hasattr(user_response, "user"):
+                                user = user_response.user
+                            elif isinstance(user_response, dict) and "user" in user_response:
+                                user = user_response["user"]
+                            else:
+                                user = user_response
+                            
+                            if user:
+                                st.session_state["user"] = user
+                                st.session_state["oauth_just_completed"] = True
+                                ensure_user_in_db(user)
+                                st.success(f"✅ Logged in as {user.email}")
+                                st.query_params.clear()
+                                st.rerun()
+                                return
+                    except Exception:
+                        # Restore failed - fall through to error message
+                        pass
+                
                 st.error("OAuth session expired or invalid. Please try logging in again.")
                 # Clear ALL session state to prevent desynchronization
                 st.query_params.clear()
@@ -496,6 +571,11 @@ def show_login():
                     del st.session_state["user"]
                 if "session" in st.session_state:
                     del st.session_state["session"]
+                # Clear stored tokens on error
+                if "supabase_access_token" in st.session_state:
+                    del st.session_state["supabase_access_token"]
+                if "supabase_refresh_token" in st.session_state:
+                    del st.session_state["supabase_refresh_token"]
                 # Clear the client to force a fresh PKCE state
                 if "supabase_client" in st.session_state:
                     del st.session_state.supabase_client
