@@ -9,32 +9,33 @@ import os
 def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
     
-    Checks multiple indicators in order:
-    1. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
-    2. HOSTNAME contains localhost or 127.0.0.1
-    3. STREAMLIT_SHARING_BASE_URL is NOT set (production sets this)
+    Checks multiple indicators in priority order:
+    1. STREAMLIT_SHARING_BASE_URL is set (definitive production indicator - check FIRST)
+    2. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
+    3. HOSTNAME contains localhost or 127.0.0.1
     4. Default to True if uncertain (safer for token-based auth)
     
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
         Defaults to True if uncertain (safer for token-based auth).
     """
-    # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
+    # 1. Check STREAMLIT_SHARING_BASE_URL FIRST (most reliable production indicator)
+    # This is ALWAYS set on Streamlit Cloud and NEVER set locally
+    # Must check this first to avoid false positives from other env vars
+    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
+    if sharing_url:
+        return False  # Definitely production (Streamlit Cloud)
+    
+    # 2. Check STREAMLIT_SERVER_PORT (strong localhost indicator)
     # This is set when running `streamlit run` locally
     server_port = os.getenv("STREAMLIT_SERVER_PORT")
     if server_port is not None:
         return True
     
-    # 2. Check HOSTNAME for localhost indicators
+    # 3. Check HOSTNAME for localhost indicators
     hostname = (os.getenv("HOSTNAME", "") or "").lower()
     if "localhost" in hostname or "127.0.0.1" in hostname:
         return True
-    
-    # 3. Check if STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    # If it's set, we're definitely on Streamlit Cloud (production)
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return False
     
     # 4. Default to localhost if uncertain (safer for token-based auth)
     # This handles cases where none of the indicators are present
