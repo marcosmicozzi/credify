@@ -66,6 +66,130 @@ button[data-testid="stBaseButton-secondary"]:hover {
   border-color: #666 !important;
 }
 </style>
+<script>
+// Fix accessibility: Add aria-label to Streamlit main menu button
+// Enhanced to persist attributes across Streamlit re-renders
+(function() {
+  const ARIA_LABEL = 'Open main menu';
+  const TITLE = 'Open main menu';
+  
+  function fixMenuButtonAccessibility() {
+    const menuButton = document.querySelector('[data-testid="stMainMenu"] button[data-testid="stBaseButton-headerNoPadding"]');
+    if (menuButton) {
+      const currentAriaLabel = menuButton.getAttribute('aria-label');
+      // Fix if aria-label is missing or empty
+      if (!currentAriaLabel || currentAriaLabel === '') {
+        menuButton.setAttribute('aria-label', ARIA_LABEL);
+      }
+      // Always set title for tooltip
+      const currentTitle = menuButton.getAttribute('title');
+      if (!currentTitle || currentTitle === '') {
+        menuButton.setAttribute('title', TITLE);
+      }
+    }
+  }
+  
+  // Run immediately
+  fixMenuButtonAccessibility();
+  
+  // Run after DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fixMenuButtonAccessibility);
+  } else {
+    // DOM already loaded, run again after a short delay
+    setTimeout(fixMenuButtonAccessibility, 100);
+  }
+  
+  // Enhanced MutationObserver to watch for attribute removal
+  const observer = new MutationObserver(function(mutations) {
+    let needsFix = false;
+    
+    mutations.forEach(function(mutation) {
+      // Check if aria-label or title was removed
+      if (mutation.type === 'attributes') {
+        if (mutation.attributeName === 'aria-label' || mutation.attributeName === 'title') {
+          const target = mutation.target;
+          // Check if it's the menu button
+          if (target.matches && target.matches('[data-testid="stBaseButton-headerNoPadding"]')) {
+            const ariaLabel = target.getAttribute('aria-label');
+            const title = target.getAttribute('title');
+            // If attribute was removed or is empty, we need to fix it
+            if (!ariaLabel || ariaLabel === '' || !title || title === '') {
+              needsFix = true;
+            }
+          }
+        }
+      } else if (mutation.type === 'childList') {
+        // New elements added - check if menu button was added
+        needsFix = true;
+      }
+    });
+    
+    // Apply fix if needed
+    if (needsFix) {
+      fixMenuButtonAccessibility();
+    }
+  });
+  
+  // Observe the entire document for changes with enhanced options
+  observer.observe(document.body, { 
+    childList: true, 
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['aria-label', 'title'],
+    attributeOldValue: true  // Track old values to detect removal
+  });
+  
+  // Also observe the menu container specifically if it exists
+  const menuContainer = document.querySelector('[data-testid="stMainMenu"]');
+  if (menuContainer) {
+    observer.observe(menuContainer, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-label', 'title'],
+      attributeOldValue: true
+    });
+    
+    // Also observe the button directly if we can find it
+    const menuButton = menuContainer.querySelector('button[data-testid="stBaseButton-headerNoPadding"]');
+    if (menuButton) {
+      observer.observe(menuButton, {
+        attributes: true,
+        attributeFilter: ['aria-label', 'title'],
+        attributeOldValue: true
+      });
+    }
+  }
+  
+  // Re-check periodically when menu container is added (Streamlit re-renders)
+  const containerObserver = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach(function(node) {
+          if (node.nodeType === 1 && node.matches && node.matches('[data-testid="stMainMenu"]')) {
+            // Menu container was added, fix accessibility and observe it
+            setTimeout(fixMenuButtonAccessibility, 50);
+            observer.observe(node, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ['aria-label', 'title'],
+              attributeOldValue: true
+            });
+          }
+        });
+      }
+    });
+  });
+  
+  // Watch for menu container being added to the DOM
+  containerObserver.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+})();
+</script>
 """, unsafe_allow_html=True)
 
 # -------------------------------
@@ -2436,31 +2560,6 @@ def show_analytics_page():
         st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
 
 
-def get_redirect_url() -> str:
-    """Get OAuth redirect URL (reused from auth.py logic)."""
-    # Try secrets first
-    custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL", None)
-    if custom_redirect and str(custom_redirect).strip():
-        return str(custom_redirect).strip().rstrip("/")
-    
-    # Check environment variables
-    streamlit_url = (
-        os.getenv("STREAMLIT_SHARING_BASE_URL") or 
-        os.getenv("STREAMLIT_SERVER_URL") or
-        os.getenv("STREAMLIT_CLOUD_BASE_URL")
-    )
-    if streamlit_url:
-        return streamlit_url.rstrip("/")
-    
-    # Check hostname
-    hostname = os.getenv("HOSTNAME", "")
-    if hostname and "streamlit.app" in hostname.lower():
-        return f"https://{hostname}".rstrip("/")
-    
-    # Default to localhost
-    return "http://localhost:8501"
-
-
 def handle_instagram_oauth_callback(user_id: str, code: str):
     """Handle Instagram OAuth callback and store tokens.
     
@@ -2719,33 +2818,42 @@ def show_settings_page():
             fb_app_id = st.secrets.get("FACEBOOK_APP_ID", None)
             fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET", None)
             
+            # Check if we're in developer mode (for developer-only UI messages)
+            developer_mode = st.secrets.get("DEVELOPER_MODE", "false").lower() == "true"
+            
             if not fb_app_id or not fb_app_secret:
-                st.warning("""
-                **Instagram connection requires Facebook App setup:**
-                
-                1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com)
-                2. Add Instagram Graph API product
-                3. Add `FACEBOOK_APP_ID` and `FACEBOOK_APP_SECRET` to `.streamlit/secrets.toml`
-                4. Configure OAuth redirect URI in Facebook App settings
-                """)
+                # Show developer-facing message only in developer mode
+                if developer_mode:
+                    st.warning("""
+                    **Instagram connection requires Facebook App setup:**
+                    
+                    1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com)
+                    2. Add Instagram Graph API product
+                    3. Add `FACEBOOK_APP_ID` and `FACEBOOK_APP_SECRET` to `.streamlit/secrets.toml`
+                    4. Configure OAuth redirect URI in Facebook App settings
+                    """)
+                else:
+                    # Generic message for regular users
+                    st.info("Instagram connection is currently unavailable. Please contact support if you need assistance.")
             else:
                 # Generate OAuth URL
                 redirect_uri = get_redirect_url()
                 
-                # Show redirect URI for debugging (helpful for Facebook App setup)
-                with st.expander("🔧 OAuth Configuration (for Facebook App setup)", expanded=False):
-                    st.caption("**Add this exact URL to Facebook App → Settings → Valid OAuth Redirect URIs:**")
-                    st.code(redirect_uri, language=None)
-                    st.caption("⚠️ Make sure it matches exactly (no trailing slash, correct protocol)")
-                    st.info("""
-                    **Steps:**
-                    1. Copy the URL above
-                    2. Go to [Facebook App Settings](https://developers.facebook.com/apps/)
-                    3. Settings → Basic → Valid OAuth Redirect URIs
-                    4. Add the URL exactly as shown
-                    5. Enable "Client OAuth Login" and "Web OAuth Login"
-                    6. Save changes
-                    """)
+                # Show redirect URI for debugging (helpful for Facebook App setup) - only in developer mode
+                if developer_mode:
+                    with st.expander("🔧 OAuth Configuration (for Facebook App setup)", expanded=False):
+                        st.caption("**Add this exact URL to Facebook App → Settings → Valid OAuth Redirect URIs:**")
+                        st.code(redirect_uri, language=None)
+                        st.caption("⚠️ Make sure it matches exactly (no trailing slash, correct protocol)")
+                        st.info("""
+                        **Steps:**
+                        1. Copy the URL above
+                        2. Go to [Facebook App Settings](https://developers.facebook.com/apps/)
+                        3. Settings → Basic → Valid OAuth Redirect URIs
+                        4. Add the URL exactly as shown
+                        5. Enable "Client OAuth Login" and "Web OAuth Login"
+                        6. Save changes
+                        """)
                 
                 # Note: redirect_uri in OAuth URL should be base URL only (state is added separately)
                 oauth_url = get_instagram_oauth_url(

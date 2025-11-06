@@ -9,21 +9,36 @@ import os
 def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
     
+    Checks multiple indicators in order:
+    1. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
+    2. HOSTNAME contains localhost or 127.0.0.1
+    3. STREAMLIT_SHARING_BASE_URL is NOT set (production sets this)
+    4. Default to True if uncertain (safer for token-based auth)
+    
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
         Defaults to True if uncertain (safer for token-based auth).
     """
-    # Check if we're on Streamlit Cloud (production)
-    if os.getenv("STREAMLIT_SHARING_BASE_URL"):
-        return False
-    # Check environment variables
-    if os.getenv("STREAMLIT_SERVER_PORT") is not None:
+    # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
+    # This is set when running `streamlit run` locally
+    server_port = os.getenv("STREAMLIT_SERVER_PORT")
+    if server_port is not None:
         return True
+    
+    # 2. Check HOSTNAME for localhost indicators
     hostname = (os.getenv("HOSTNAME", "") or "").lower()
     if "localhost" in hostname or "127.0.0.1" in hostname:
         return True
-    # If no Streamlit Cloud indicators, assume localhost
-    return True  # Default to localhost if uncertain (safer for token-based auth)
+    
+    # 3. Check if STREAMLIT_SHARING_BASE_URL is set (production indicator)
+    # If it's set, we're definitely on Streamlit Cloud (production)
+    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
+    if sharing_url:
+        return False
+    
+    # 4. Default to localhost if uncertain (safer for token-based auth)
+    # This handles cases where none of the indicators are present
+    return True
 
 # -------------------------------
 # LOGIN BUTTON STYLING
@@ -138,79 +153,43 @@ auth_supabase = supabase
 # REDIRECT URL HELPER
 # -------------------------------
 def get_redirect_url() -> str:
-    """Dynamically determines the OAuth redirect URL based on the environment.
+    """Dynamically resolve the correct OAuth redirect URL based on environment.
+    
+    Checks configuration sources in this priority order:
+    1. Localhost detection (if on localhost, always use localhost URL - highest priority for dev)
+    2. OAUTH_REDIRECT_URL secret (explicit override for production)
+    3. STREAMLIT_SHARING_BASE_URL environment variable (production indicator)
+    4. Default to localhost if uncertain
     
     Returns:
-        The redirect URL for OAuth callbacks (production URL or localhost)
+        str: Redirect URL for OAuth callbacks
+            - Localhost URL (http://localhost:{port}) if running locally (always wins)
+            - Custom URL if OAUTH_REDIRECT_URL secret is set (production only)
+            - Production URL if STREAMLIT_SHARING_BASE_URL is set
+            - Defaults to http://localhost:8501 if uncertain
     """
-    debug_mode = str(st.secrets.get("DEBUG_REDIRECT", "false")).lower() == "true"
-    detected_source = None
+    # 1. Check localhost first - localhost always wins during local development
+    if is_localhost():
+        port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
+        return f"http://localhost:{port}"
     
-    # 1. Check if explicitly set in secrets (highest priority)
-    # Set this in Streamlit Cloud secrets: OAUTH_REDIRECT_URL = "https://credify-belofupq9c9qxcbwlvfqpl.streamlit.app"
+    # 2. Check explicit secret configuration (for production overrides)
     try:
-        # Try multiple ways to access the secret (handles different Streamlit versions)
-        custom_redirect = None
-        try:
-            custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
-        except (AttributeError, KeyError):
-            try:
-                custom_redirect = st.secrets["OAUTH_REDIRECT_URL"]
-            except (KeyError, AttributeError):
-                pass
-        
+        custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
         if custom_redirect and str(custom_redirect).strip():
-            custom_redirect = str(custom_redirect).strip().rstrip("/")
-            if debug_mode:
-                st.sidebar.success(f"✅ Redirect URL from secrets: {custom_redirect}")
-            return custom_redirect
-        elif debug_mode:
-            st.sidebar.info("ℹ️ OAUTH_REDIRECT_URL not found in secrets")
-    except Exception as e:
-        if debug_mode:
-            st.sidebar.warning(f"⚠️ Error reading OAUTH_REDIRECT_URL from secrets: {e}")
+            return str(custom_redirect).strip().rstrip("/")
+    except (AttributeError, KeyError):
+        # Secret not found or not accessible - continue to other checks
+        pass
     
-    # 2. Check Streamlit Cloud - try multiple env var patterns
-    streamlit_url = (
-        os.getenv("STREAMLIT_SHARING_BASE_URL") or 
-        os.getenv("STREAMLIT_SERVER_URL") or
-        os.getenv("STREAMLIT_SERVER") or
-        os.getenv("STREAMLIT_CLOUD_BASE_URL")
-    )
-    if streamlit_url:
-        detected_source = "environment variable"
-        if debug_mode:
-            st.sidebar.info(f"🔍 Redirect URL from env var: {streamlit_url}")
-        return streamlit_url.rstrip("/")
+    # 3. Check for Streamlit Cloud (production)
+    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
+    if sharing_url:
+        return sharing_url.rstrip("/")
     
-    # 3. Check if we're on Streamlit Cloud by checking for streamlit.app domain
-    hostname = os.getenv("HOSTNAME", "")
-    if hostname and "streamlit.app" in hostname.lower():
-        detected_source = "HOSTNAME env var"
-        url = f"https://{hostname}".rstrip("/")
-        if debug_mode:
-            st.sidebar.info(f"🔍 Redirect URL from HOSTNAME: {url}")
-        return url
-    
-    # 4. Check for explicit production URL in environment
-    prod_url = os.getenv("PRODUCTION_URL") or os.getenv("BASE_URL")
-    if prod_url:
-        detected_source = "PRODUCTION_URL env var"
-        if debug_mode:
-            st.sidebar.info(f"🔍 Redirect URL from PRODUCTION_URL: {prod_url}")
-        return prod_url.rstrip("/")
-    
-    # 5. Debug: Show what we found
-    if debug_mode:
-        st.sidebar.warning("🔍 Debug Info:")
-        st.sidebar.write(f"- OAUTH_REDIRECT_URL in secrets: {custom_redirect}")
-        st.sidebar.write(f"- STREAMLIT_SHARING_BASE_URL: {os.getenv('STREAMLIT_SHARING_BASE_URL')}")
-        st.sidebar.write(f"- HOSTNAME: {hostname}")
-        st.sidebar.write(f"- All env vars with 'STREAMLIT': {[k for k in os.environ.keys() if 'STREAMLIT' in k]}")
-        st.sidebar.write(f"- Falling back to: localhost:8501")
-    
-    # 6. Default: localhost for local development
-    return "http://localhost:8501"
+    # 4. Default to localhost (fallback)
+    port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
+    return f"http://localhost:{port}"
 
 
 # -------------------------------
@@ -604,40 +583,54 @@ def show_login():
     # --- Google Sign-In Button --- (centered)
     # Generate OAuth URL on page load so we can use it with link_button for direct redirect
     try:
-        redirect_url = get_redirect_url()
+        # Check debug mode first to gate all debug output
         debug_mode = st.secrets.get("DEBUG_REDIRECT", "false").lower() == "true"
         
+        # Get redirect URL (always needed, but debug output is gated)
+        redirect_url = get_redirect_url()
+        
+        # Debug info only shown when DEBUG_REDIRECT is enabled
         if debug_mode:
+            is_local = is_localhost()
+            st.write("🔍 **Debug - is_localhost():**", is_local)
+            st.write("🔍 **Debug - STREAMLIT_SERVER_PORT:**", os.getenv("STREAMLIT_SERVER_PORT"))
+            st.write("🔍 **Debug - STREAMLIT_SHARING_BASE_URL:**", os.getenv("STREAMLIT_SHARING_BASE_URL"))
+            st.write("🔍 **Debug - HOSTNAME:**", os.getenv("HOSTNAME"))
+            st.write("🔍 **Debug - Redirect URL:**", redirect_url)
+            st.write("🔍 **Debug - OAUTH_REDIRECT_URL secret:**", st.secrets.get("OAUTH_REDIRECT_URL", "NOT SET"))
             st.info(f"🔍 Preparing OAuth with redirect URL: {redirect_url}")
             st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
         
         # Supabase OAuth with dynamic redirect URL
+        # Priority: Use options dict with redirect_to (standard Python client format)
+        # This ensures the redirect URL is explicitly passed to Supabase, overriding the Site URL
         res = None
         last_error = None
         
-        # Format 1: redirect_to as top-level parameter (most likely correct format)
+        # Format 1: redirect_to in options (snake_case) - Standard Python client format
+        # This is the recommended format and ensures redirect_to is explicitly passed
         try:
             res = supabase.auth.sign_in_with_oauth({
                 "provider": "google",
-                "redirect_to": redirect_url
+                "options": {
+                    "redirect_to": redirect_url
+                }
             })
             if debug_mode:
-                st.success(f"✅ OAuth URL generated using redirect_to (top level)")
+                st.success(f"✅ OAuth URL generated using redirect_to in options (standard format)")
         except (TypeError, KeyError, AttributeError, Exception) as e1:
             last_error = e1
-            # Format 2: redirect_to in options (snake_case) - some versions use this
+            # Format 2: redirect_to as top-level parameter (fallback for older versions)
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "options": {
-                        "redirect_to": redirect_url
-                    }
+                    "redirect_to": redirect_url
                 })
                 if debug_mode:
-                    st.success(f"✅ OAuth URL generated using redirect_to (in options)")
+                    st.success(f"✅ OAuth URL generated using redirect_to (top level, fallback)")
             except (TypeError, KeyError, AttributeError, Exception) as e2:
                 last_error = e2
-                # Format 3: redirectTo in options (camelCase) - JS/TS style
+                # Format 3: redirectTo in options (camelCase) - JS/TS style fallback
                 try:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
@@ -646,20 +639,29 @@ def show_login():
                         }
                     })
                     if debug_mode:
-                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
+                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase, fallback)")
                 except (TypeError, KeyError, AttributeError, Exception) as e3:
                     last_error = e3
                     raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
         
         if res and hasattr(res, "url"):
             oauth_url = res.url
+            
+            # Verify redirect URL in OAuth request (only shown in debug mode)
             if debug_mode:
                 from urllib.parse import urlparse, parse_qs
                 parsed = urlparse(oauth_url)
                 params = parse_qs(parsed.query)
                 redirect_param = params.get("redirect_to") or params.get("redirectTo")
-                st.info(f"🔍 OAuth URL contains redirect_to: {redirect_param}")
-                st.text(f"Full OAuth URL (first 200 chars): {oauth_url[:200]}...")
+                
+                if redirect_param:
+                    redirect_value = redirect_param[0] if isinstance(redirect_param, list) else redirect_param
+                    st.success(f"✅ Redirect URL confirmed in OAuth request: {redirect_value}")
+                else:
+                    st.warning(f"⚠️ Warning: redirect_to not found in OAuth URL. Expected: {redirect_url}")
+                
+                st.info(f"🔍 Full OAuth URL (first 200 chars): {oauth_url[:200]}...")
+                st.info(f"🔍 All OAuth URL params: {dict(params)}")
             
             # Use link_button for direct redirect (no intermediate click)
             st.markdown("<div style='display: flex; justify-content: center; margin-bottom: 20px;'>", unsafe_allow_html=True)
@@ -682,35 +684,39 @@ def show_login():
     email_col1, email_col2, email_col3 = st.columns([1, 2, 1])
     with email_col2:
         st.markdown("<p style='text-align: center; color: #666; margin-bottom: 20px;'>Or use Email / Password</p>", unsafe_allow_html=True)
-        email = st.text_input("Email", key="email_input")
-        password = st.text_input("Password", type="password", key="password_input")
+        with st.form("email_password_form", clear_on_submit=False):
+            email = st.text_input("Email", key="email_input")
+            password = st.text_input("Password", type="password", key="password_input")
+            
+            sign_cols = st.columns(2)
+            with sign_cols[0]:
+                sign_in_submitted = st.form_submit_button("Sign In", use_container_width=True)
+            with sign_cols[1]:
+                sign_up_submitted = st.form_submit_button("Sign Up", use_container_width=True)
         
-        sign_cols = st.columns(2)
-        with sign_cols[0]:
-            if st.button("Sign In", use_container_width=True, key="sign_in"):
-                try:
-                    user = supabase.auth.sign_in_with_password(
-                        {"email": email, "password": password}
-                    )
-                    if user and user.user:
-                        st.session_state["user"] = user.user
-                        ensure_user_in_db(user.user)
-                        st.success(f"Welcome, {user.user.email}!")
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
-                except Exception as e:
-                    st.error(f"Login failed: {e}")
+        if sign_in_submitted:
+            try:
+                user = supabase.auth.sign_in_with_password(
+                    {"email": email, "password": password}
+                )
+                if user and user.user:
+                    st.session_state["user"] = user.user
+                    ensure_user_in_db(user.user)
+                    st.success(f"Welcome, {user.user.email}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials.")
+            except Exception as e:
+                st.error(f"Login failed: {e}")
 
-        with sign_cols[1]:
-            if st.button("Sign Up", use_container_width=True, key="sign_up"):
-                try:
-                    user = supabase.auth.sign_up(
-                        {"email": email, "password": password}
-                    )
-                    st.success("✅ Account created! Check your email to verify.")
-                except Exception as e:
-                    st.error(f"Sign-up failed: {e}")
+        if sign_up_submitted:
+            try:
+                user = supabase.auth.sign_up(
+                    {"email": email, "password": password}
+                )
+                st.success("✅ Account created! Check your email to verify.")
+            except Exception as e:
+                st.error(f"Sign-up failed: {e}")
 
 
 # -------------------------------
