@@ -4,6 +4,28 @@ from urllib.parse import urlparse, parse_qs
 import os
 
 # -------------------------------
+# HELPER FUNCTIONS (defined early to ensure they're always importable)
+# -------------------------------
+def is_localhost() -> bool:
+    """Detect if running on localhost (HTTP) vs production (HTTPS).
+    
+    Returns:
+        True if running on localhost, False if on production (Streamlit Cloud).
+        Defaults to True if uncertain (safer for token-based auth).
+    """
+    # Check if we're on Streamlit Cloud (production)
+    if os.getenv("STREAMLIT_SHARING_BASE_URL"):
+        return False
+    # Check environment variables
+    if os.getenv("STREAMLIT_SERVER_PORT") is not None:
+        return True
+    hostname = (os.getenv("HOSTNAME", "") or "").lower()
+    if "localhost" in hostname or "127.0.0.1" in hostname:
+        return True
+    # If no Streamlit Cloud indicators, assume localhost
+    return True  # Default to localhost if uncertain (safer for token-based auth)
+
+# -------------------------------
 # LOGIN BUTTON STYLING
 # -------------------------------
 LOGIN_BUTTON_STYLE = """
@@ -44,27 +66,6 @@ if "supabase_client" not in st.session_state:
     st.session_state.supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase: Client = st.session_state.supabase_client
-
-# Helper to detect if we're on localhost
-# This is needed before get_redirect_url() is defined
-def is_localhost() -> bool:
-    """Detect if running on localhost (HTTP) vs production (HTTPS).
-    
-    Returns:
-        True if running on localhost, False if on production (Streamlit Cloud).
-        Defaults to True if uncertain (safer for token-based auth).
-    """
-    # Check if we're on Streamlit Cloud (production)
-    if os.getenv("STREAMLIT_SHARING_BASE_URL"):
-        return False
-    # Check environment variables
-    if os.getenv("STREAMLIT_SERVER_PORT") is not None:
-        return True
-    hostname = (os.getenv("HOSTNAME", "") or "").lower()
-    if "localhost" in hostname or "127.0.0.1" in hostname:
-        return True
-    # If no Streamlit Cloud indicators, assume localhost
-    return True  # Default to localhost if uncertain (safer for token-based auth)
 
 if "supabase_access_token" in st.session_state and "supabase_refresh_token" in st.session_state:
     try:
