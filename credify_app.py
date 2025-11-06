@@ -7,8 +7,23 @@ import json
 import plotly.graph_objects as go
 import plotly.express as px
 from html import escape
-from auth import show_login, logout_button, supabase as auth_supabase  # logout now handled in topbar menu
+from auth import show_login, logout_button, supabase as auth_supabase, get_redirect_url  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
+from utils.instagram_fetcher import (
+    fetch_and_store_instagram_insights,
+    get_latest_instagram_metrics,
+    get_user_instagram_account,
+    FetchResult
+)
+from utils.instagram_oauth import (
+    get_instagram_oauth_url,
+    exchange_code_for_token,
+    get_long_lived_token,
+    get_instagram_business_account_id,
+    store_instagram_token,
+    disconnect_instagram_account,
+    is_token_expired
+)
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -60,6 +75,10 @@ button[data-testid="stBaseButton-secondary"]:hover {
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
 YOUTUBE_API_KEY = st.secrets.get("YOUTUBE_API_KEY")
+# Instagram tokens are now per-user (stored in user_tokens table)
+# Legacy secrets kept for backward compatibility during migration
+IG_LONG_TOKEN = st.secrets.get("IG_LONG_TOKEN", None)  # Deprecated: use per-user tokens
+IG_ACCOUNT_ID = st.secrets.get("IG_ACCOUNT_ID", None)  # Deprecated: use per-user tokens
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .streamlit/secrets.toml")
@@ -75,11 +94,87 @@ supabase: Client = auth_supabase
 # -------------------------------
 # AUTHENTICATION GATE
 # -------------------------------
+# IMPORTANT: Check for OAuth callback BEFORE session validation
+# OAuth callbacks need to be processed first, before we validate existing sessions
+query_params = st.query_params
+is_oauth_callback = "code" in query_params or "error" in query_params
+
+if is_oauth_callback:
+    # OAuth callback in progress - let auth.py handle it
+    # Clear any stale session state to prevent validation errors
+    # The OAuth handler will set the new session after successful exchange
+    if "user" in st.session_state:
+        # Clear stale user state during OAuth callback
+        # This prevents session validation from failing on stale sessions
+        del st.session_state["user"]
+    if "session" in st.session_state:
+        del st.session_state["session"]
+    # Show login page which will handle the OAuth callback
+    show_login()
+    st.stop()
+
 if "user" not in st.session_state:
     show_login()
     st.stop()
 
-user_email = st.session_state["user"].email
+# Validate user session is still valid
+user = st.session_state.get("user")
+if not user or not hasattr(user, "email"):
+    # Session state exists but user object is invalid - clear and show login
+    st.session_state.clear()
+    show_login()
+    st.stop()
+
+# Verify Supabase session is still valid (skip for DemoUser and immediately after OAuth)
+user_email = user.email
+is_demo_user = user_email == "demo_user@example.com"
+oauth_just_completed = st.session_state.get("oauth_just_completed", False)
+
+# Skip session validation for DemoUser and immediately after OAuth completion
+# OAuth completion flag prevents race condition where validation runs before Supabase session is ready
+if not is_demo_user and not oauth_just_completed:
+    # For real OAuth users, verify Supabase session is still valid
+    try:
+        # Try to get current user from Supabase to verify session
+        current_user_response = auth_supabase.auth.get_user()
+        if not current_user_response:
+            # Session expired - clear and show login
+            st.session_state.clear()
+            auth_supabase.auth.sign_out()
+            show_login()
+            st.stop()
+        
+        # Check if we got a user object (different response formats)
+        current_user = None
+        if hasattr(current_user_response, "user"):
+            current_user = current_user_response.user
+        elif isinstance(current_user_response, dict) and "user" in current_user_response:
+            current_user = current_user_response["user"]
+        else:
+            current_user = current_user_response
+        
+        # Verify the session user matches our stored user
+        if not current_user or not hasattr(current_user, "email") or current_user.email.lower() != user_email.lower():
+            # Session user doesn't match - clear and show login
+            st.session_state.clear()
+            auth_supabase.auth.sign_out()
+            show_login()
+            st.stop()
+    except Exception as e:
+        # Session validation failed - clear and show login
+        # This catches expired tokens, network errors, etc.
+        st.session_state.clear()
+        try:
+            auth_supabase.auth.sign_out()
+        except Exception:
+            pass
+        show_login()
+        st.stop()
+elif oauth_just_completed:
+    # OAuth just completed - clear the flag after this rerun
+    # On the next rerun, session validation will run normally
+    st.session_state["oauth_just_completed"] = False
+
 normalized_email = user_email.lower()
 # Logout and login notice now live under the avatar menu in the topbar
 
@@ -766,6 +861,59 @@ def fetch_user_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: st
     out = full.merge(agg, on="date", how="left")
     out = out.fillna({"views": 0, "likes": 0, "comments": 0})
     out["date"] = pd.to_datetime(out["date"])  # for chart x-axis
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def fetch_instagram_daily_timeseries(u_id: str, start_date_iso: str, end_date_iso: str, metric_name: str) -> pd.DataFrame:
+    """Return daily Instagram metrics for a specific metric.
+    
+    Instagram metrics are already daily values (not cumulative), so we just aggregate by date.
+    
+    Args:
+        u_id: User ID
+        start_date_iso: Start date in ISO format
+        end_date_iso: End date in ISO format
+        metric_name: Metric name (e.g., 'reach', 'profile_views', 'accounts_engaged', 'follower_count')
+        
+    Returns:
+        DataFrame with columns: date, value
+    """
+    # Parse date range
+    start_dt_utc = pd.to_datetime(start_date_iso, utc=True)
+    end_dt_utc = pd.to_datetime(end_date_iso, utc=True)
+    
+    # Fetch Instagram insights for this user and metric
+    insights_resp = supabase.table("instagram_insights") \
+        .select("value, end_time") \
+        .eq("user_id", u_id) \
+        .eq("metric", metric_name) \
+        .gte("end_time", start_date_iso) \
+        .lte("end_time", end_date_iso) \
+        .order("end_time", desc=False) \
+        .execute()
+    
+    if not insights_resp.data:
+        return pd.DataFrame(columns=["date", "value"]).astype({"date": "datetime64[ns]"})
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(insights_resp.data)
+    df["end_time"] = pd.to_datetime(df["end_time"], utc=True, errors="coerce")
+    df["date"] = df["end_time"].dt.date
+    
+    # Aggregate by date (take latest value per day if multiple)
+    df_sorted = df.sort_values(["date", "end_time"])
+    daily_agg = df_sorted.groupby("date", as_index=False).last()
+    
+    # Ensure full date range
+    start_dt = start_dt_utc.date()
+    end_dt = end_dt_utc.date()
+    all_days = pd.date_range(start=start_dt, end=end_dt, freq="D").date
+    full = pd.DataFrame({"date": all_days})
+    out = full.merge(daily_agg[["date", "value"]], on="date", how="left")
+    out = out.fillna({"value": 0})
+    out["date"] = pd.to_datetime(out["date"])
+    
     return out
 
 
@@ -1607,7 +1755,209 @@ def _show_generic_platform_overview(platform_key: str, platform_label: str):
 
 
 def show_instagram_overview():
-    _show_generic_platform_overview("instagram", "Instagram")
+    st.session_state["selected_platform"] = "instagram"
+
+    # Back to Profile Overview
+    back_cols = st.columns([1, 2, 1])
+    with back_cols[0]:
+        if st.button("← Back to Profile Overview", key="btn_back_profile_instagram"):
+            st.session_state["page_override"] = "Profile"
+            st.rerun()
+
+    # Get user info
+    user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
+    if not user_res.data:
+        st.info("No profile found yet — one will be created after your first claim.")
+        return
+    user = user_res.data[0]
+    u_id = user["u_id"]
+
+    # Get user's Instagram account (multi-user aware)
+    instagram_account = get_user_instagram_account(supabase, u_id)
+    
+    if not instagram_account:
+        st.info("""
+        **Connect your Instagram account to view insights**
+        
+        Go to **Settings → Connections** to connect your Instagram Business account.
+        """)
+        return
+    
+    access_token = instagram_account["access_token"]
+    account_id = instagram_account["account_id"]
+
+    # Header: profile image
+    profile_image_url = user.get("profile_image_url")
+    if profile_image_url:
+        avatar_url = profile_image_url
+    else:
+        avatar_url = f"https://api.dicebear.com/7.x/identicon/svg?seed={user['u_name']}"
+    st.markdown(f"""
+        <div style=\"text-align: center; margin-bottom: 24px;\">
+            <img src=\"{avatar_url}\" 
+                 style=\"width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 12px auto; display: block; object-fit: cover; object-position: center; border: 3px solid #E6E6E6; box-shadow: 0 2px 8px rgba(0,0,0,0.1); transform: translateX(-12px);\" />
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Name and Bio
+    sanitized_name = sanitize_user_input(user.get('u_name', ''))
+    st.markdown(f"<h1 style='text-align: center; margin-bottom: 0px; font-weight: 800;'>{sanitized_name}</h1>", unsafe_allow_html=True)
+    if user.get("u_bio"):
+        sanitized_bio = sanitize_user_input(user.get('u_bio', ''))
+        st.markdown(f"<p style='text-align: center; color: #666; margin-top: 4px; margin-bottom: 0px;'>{sanitized_bio}</p>", unsafe_allow_html=True)
+
+    # Metrics style (match Profile centering)
+    st.markdown(f"""
+        <style>
+        .profile-metrics-container {{
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 50px;
+            margin: 16px 0 20px 0;
+            flex-wrap: wrap;
+        }}
+        .profile-metric-item {{
+            text-align: center;
+            min-width: 60px;
+        }}
+        @media (max-width: 768px) {{
+            .profile-metrics-container {{ gap: 30px; }}
+        }}
+        @media (max-width: 480px) {{
+            .profile-metrics-container {{ gap: 20px; }}
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Fetch latest Instagram metrics
+    latest_metrics = get_latest_instagram_metrics(supabase, user_id=u_id)
+    
+    # Map Instagram metrics to display names
+    reach = latest_metrics.get("reach", 0)
+    profile_views = latest_metrics.get("profile_views", 0)
+    accounts_engaged = latest_metrics.get("accounts_engaged", 0)
+    follower_count = latest_metrics.get("follower_count", 0)
+
+    # Metrics row
+    st.markdown(f"""
+        <div class="profile-metrics-container">
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Reach</div>
+                <div style="font-size: 20px; font-weight: 700;">{reach:,.0f}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Profile Views</div>
+                <div style="font-size: 20px; font-weight: 700;">{profile_views:,.0f}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Accounts Engaged</div>
+                <div style="font-size: 20px; font-weight: 700;">{accounts_engaged:,.0f}</div>
+            </div>
+            <div class="profile-metric-item">
+                <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Followers</div>
+                <div style="font-size: 20px; font-weight: 700;">{follower_count:,.0f}</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Refresh + View Analytics actions
+    actions_col1, actions_col2, actions_col3 = st.columns([1, 2, 1])
+    with actions_col2:
+        act_cols = st.columns(2)
+        with act_cols[0]:
+            if st.button("🔄 Refresh Insights", key="ig_refresh_btn", use_container_width=True):
+                with st.spinner("Fetching latest Instagram insights..."):
+                    try:
+                        # Get user's Instagram account (multi-user)
+                        account_info = get_user_instagram_account(supabase, u_id)
+                        
+                        if not account_info:
+                            st.error("Instagram account not connected. Go to Settings → Connections to connect your account.")
+                            return
+                        
+                        access_token = account_info["access_token"]
+                        account_id = account_info["account_id"]
+                        
+                        # Check if token is expired
+                        expires_at = account_info.get("expires_at")
+                        if expires_at and is_token_expired(expires_at):
+                            st.warning("Your Instagram token has expired. Please reconnect in Settings → Connections.")
+                            return
+                        
+                        result: FetchResult = fetch_and_store_instagram_insights(
+                            supabase=supabase,
+                            access_token=access_token,
+                            instagram_account_id=account_id,
+                            user_id=u_id
+                        )
+                        
+                        if result.success:
+                            st.success(f"✅ Fetched and stored {result.total_inserted} metric records")
+                            st.rerun()
+                        elif result.total_inserted > 0:
+                            st.warning(f"⚠️ Inserted {result.total_inserted} records with {result.total_errors} errors")
+                            if result.errors:
+                                with st.expander("View errors"):
+                                    for error in result.errors:
+                                        st.error(error)
+                        else:
+                            st.warning("No new metrics fetched. Data may already be up to date.")
+                            if result.errors:
+                                st.error(f"Errors: {', '.join(result.errors)}")
+                    except Exception as e:
+                        st.error(f"Error fetching Instagram insights: {str(e)}")
+        with act_cols[1]:
+            if st.button("View Analytics", key="btn_view_ig_analytics", use_container_width=True):
+                st.session_state["selected_platform"] = "instagram"
+                st.session_state["page_override"] = "Analytics"
+                st.rerun()
+
+    st.divider()
+
+    # Show recent metrics history
+    st.markdown("### Recent Insights")
+    try:
+        insights_res = supabase.table("instagram_insights") \
+            .select("metric, value, end_time") \
+            .eq("user_id", u_id) \
+            .order("end_time", desc=True) \
+            .limit(20) \
+            .execute()
+        
+        if insights_res.data:
+            insights_df = pd.DataFrame(insights_res.data)
+            insights_df["end_time"] = pd.to_datetime(insights_df["end_time"])
+            insights_df = insights_df.sort_values("end_time")
+            
+            # Create a simple line chart for each metric
+            for metric_name in ["reach", "profile_views", "accounts_engaged", "follower_count"]:
+                metric_data = insights_df[insights_df["metric"] == metric_name]
+                if not metric_data.empty:
+                    st.markdown(f"#### {metric_name.replace('_', ' ').title()}")
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=metric_data["end_time"],
+                        y=metric_data["value"],
+                        mode='lines+markers',
+                        name=metric_name,
+                        line=dict(color='rgba(66,133,244,1)', width=2),
+                        marker=dict(size=4)
+                    ))
+                    fig.update_layout(
+                        height=200,
+                        showlegend=False,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)'),
+                        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)')
+                    )
+                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.info("No Instagram insights data yet. Click 'Refresh Insights' to fetch your first metrics.")
+    except Exception as e:
+        st.warning(f"Could not load insights history: {str(e)}")
 
 
 def show_tiktok_overview():
@@ -1635,10 +1985,13 @@ def show_analytics_page():
             if st.button("← Back to Overview", key="btn_back_overview"):
                 st.session_state.analytics_view = "overall"
                 st.rerun()
-        if platform != "youtube":
+        if platform == "youtube":
+            st.caption("Daily totals across your YouTube credits (views, likes, comments).")
+        elif platform == "instagram":
+            st.caption("Daily Instagram Business account metrics (reach, profile views, accounts engaged, followers).")
+        else:
             st.info("Platform analytics coming soon.")
             return
-        st.caption("Daily totals across your YouTube credits (views, likes, comments).")
 
     # Identify user id
     user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
@@ -1664,102 +2017,137 @@ def show_analytics_page():
             start_date = today - timedelta(days=365)  # Full year
             end_date = yesterday
 
-    # Fetch data (used by both overview and YouTube detail)
+    # Fetch data (used by both overview and platform detail)
     start_iso = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     end_iso = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc).isoformat()
     
-    # Debug: Check what projects and data exist
-    projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
-    project_ids = [p["p_id"] for p in (projects_resp.data or [])]
+    # Platform-specific data fetching
+    ts_df_youtube = pd.DataFrame()
+    ts_df_instagram = {}
     
-    # Check if any metrics exist at all for these projects
-    any_metrics_check = supabase.table("youtube_metrics") \
-        .select("p_id, fetched_at, view_count") \
-        .in_("p_id", project_ids) \
-        .order("fetched_at", desc=False) \
-        .limit(5) \
-        .execute()
-    
-    with st.spinner("Loading analytics..."):
-        ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
-        if ts_df_youtube.empty:
-            end_date_fallback = end_date - timedelta(days=1)
-            if end_date_fallback >= start_date:
-                end_iso_fb = datetime.combine(end_date_fallback, datetime.max.time(), tzinfo=timezone.utc).isoformat()
-                ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
-    
-    # Debug info (temporary)
-    if ts_df_youtube.empty and any_metrics_check.data:
-        with st.expander("🔍 Debug Info (click to expand)", expanded=False):
-            st.write(f"**User ID:** {u_id}")
-            st.write(f"**Linked Projects:** {project_ids}")
-            st.write(f"**Date Range:** {start_date} to {end_date}")
-            st.write(f"**Found {len(any_metrics_check.data)} metric records:**")
-            for m in any_metrics_check.data:
-                st.write(f"  - {m['p_id']}: {m.get('fetched_at', 'N/A')} ({m.get('view_count', 0)} views)")
-
-    if ts_df_youtube.empty:
-        if not project_ids:
-            st.info("No projects linked to your account yet. Add credits to get started.")
-            return
+    if analytics_view == "overall" or platform == "youtube":
+        # Debug: Check what projects and data exist
+        projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+        project_ids = [p["p_id"] for p in (projects_resp.data or [])]
         
-        # Check if any metrics exist for these projects (without date filter)
-        any_metrics = supabase.table("youtube_metrics") \
-            .select("p_id, fetched_at") \
+        # Check if any metrics exist at all for these projects
+        any_metrics_check = supabase.table("youtube_metrics") \
+            .select("p_id, fetched_at, view_count") \
             .in_("p_id", project_ids) \
             .order("fetched_at", desc=False) \
-            .limit(1) \
+            .limit(5) \
             .execute()
         
-        if any_metrics.data:
-            earliest_date = pd.to_datetime(any_metrics.data[0].get("fetched_at", ""))
-            latest_check = supabase.table("youtube_metrics") \
+        with st.spinner("Loading analytics..."):
+            ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso)
+            if ts_df_youtube.empty:
+                end_date_fallback = end_date - timedelta(days=1)
+                if end_date_fallback >= start_date:
+                    end_iso_fb = datetime.combine(end_date_fallback, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+                    ts_df_youtube = fetch_user_daily_timeseries(u_id, start_iso, end_iso_fb)
+    
+    if analytics_view == "overall" or platform == "instagram":
+        # Fetch Instagram metrics
+        with st.spinner("Loading Instagram analytics..."):
+            instagram_metrics = ["reach", "profile_views", "accounts_engaged", "follower_count"]
+            for metric in instagram_metrics:
+                ts_df_instagram[metric] = fetch_instagram_daily_timeseries(u_id, start_iso, end_iso, metric)
+    
+    # Platform-specific data validation and metric setup
+    if platform == "youtube":
+        # Debug info (temporary)
+        projects_resp = supabase.table("user_projects").select("p_id").eq("u_id", u_id).execute()
+        project_ids = [p["p_id"] for p in (projects_resp.data or [])]
+        any_metrics_check = supabase.table("youtube_metrics") \
+            .select("p_id, fetched_at, view_count") \
+            .in_("p_id", project_ids) \
+            .order("fetched_at", desc=False) \
+            .limit(5) \
+            .execute()
+        
+        if ts_df_youtube.empty:
+            if not project_ids:
+                st.info("No projects linked to your account yet. Add credits to get started.")
+                return
+            
+            # Check if any metrics exist for these projects (without date filter)
+            any_metrics = supabase.table("youtube_metrics") \
                 .select("p_id, fetched_at") \
                 .in_("p_id", project_ids) \
-                .order("fetched_at", desc=True) \
+                .order("fetched_at", desc=False) \
                 .limit(1) \
                 .execute()
-            latest_date = pd.to_datetime(latest_check.data[0].get("fetched_at", "")) if latest_check.data else None
             
-            date_range_msg = f"Data exists from {earliest_date.strftime('%Y-%m-%d')}"
-            if latest_date:
-                date_range_msg += f" to {latest_date.strftime('%Y-%m-%d')}"
-            
-            st.warning(
-                f"No metrics found in the selected date range ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}). "
-                f"{date_range_msg}."
-            )
-        else:
-            st.info("No metrics yet. Once your AWS job runs, data will appear here.")
-        return
+            if any_metrics.data:
+                earliest_date = pd.to_datetime(any_metrics.data[0].get("fetched_at", ""))
+                latest_check = supabase.table("youtube_metrics") \
+                    .select("p_id, fetched_at") \
+                    .in_("p_id", project_ids) \
+                    .order("fetched_at", desc=True) \
+                    .limit(1) \
+                    .execute()
+                latest_date = pd.to_datetime(latest_check.data[0].get("fetched_at", "")) if latest_check.data else None
+                
+                date_range_msg = f"Data exists from {earliest_date.strftime('%Y-%m-%d')}"
+                if latest_date:
+                    date_range_msg += f" to {latest_date.strftime('%Y-%m-%d')}"
+                
+                st.warning(
+                    f"No metrics found in the selected date range ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}). "
+                    f"{date_range_msg}."
+                )
+            else:
+                st.info("No metrics yet. Once your AWS job runs, data will appear here.")
+            return
+        
+        # Metric definitions for YouTube
+        metric_options = ["Views", "Likes", "Comments"]
+        metric_map = {
+            "Views": "views",
+            "Likes": "likes",
+            "Comments": "comments",
+        }
+        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) for m in metric_options}
+        chart_df_base = ts_df_youtube
+        
+    elif platform == "instagram":
+        # Check if Instagram data exists
+        has_instagram_data = any(not df.empty for df in ts_df_instagram.values())
+        if not has_instagram_data:
+            st.info("No Instagram insights data yet. Go to Instagram Overview and click 'Refresh Insights' to fetch your first metrics.")
+            return
+        
+        # Metric definitions for Instagram
+        metric_options = ["Reach", "Profile Views", "Accounts Engaged", "Followers"]
+        metric_map = {
+            "Reach": "reach",
+            "Profile Views": "profile_views",
+            "Accounts Engaged": "accounts_engaged",
+            "Followers": "follower_count",
+        }
+        metric_totals = {}
+        for display_name, metric_key in metric_map.items():
+            df = ts_df_instagram.get(metric_key, pd.DataFrame())
+            metric_totals[display_name] = int(df["value"].sum()) if not df.empty else 0
+        chart_df_base = None  # Will be set per metric
     
-    # Check if all values are zero (which might indicate a calculation issue)
-    if not ts_df_youtube.empty and ts_df_youtube[["views", "likes", "comments"]].sum().sum() == 0:
-        # This means we have data in the date range, but all increments calculated to 0
-        # This can happen if there's only one snapshot per video (can't calculate diff)
-        # or if all snapshots have the same values
-        st.info("Data found but all daily increments are zero. This can happen if there's only one snapshot per video or if metrics haven't changed.")
-
-    # Inform when data appears too sparse
-    num_days = (end_date - start_date).days + 1
-    if num_days >= 7 and (ts_df_youtube[["views", "likes", "comments"]].sum().sum() == 0):
-        st.warning("We have a limited dataset right now; charts may look flat until more days pass.")
-
-    # Metric definitions
-    metric_options = ["Views", "Likes", "Comments"]
-    metric_map = {
-        "Views": "views",
-        "Likes": "likes",
-        "Comments": "comments",
-    }
+    else:
+        # Overall view - combine YouTube and Instagram
+        metric_options = ["Views", "Likes", "Comments"]
+        metric_map = {
+            "Views": "views",
+            "Likes": "likes",
+            "Comments": "comments",
+        }
+        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) if not ts_df_youtube.empty else 0 for m in metric_options}
+        chart_df_base = ts_df_youtube
     
     # Track selected metric in session state
     if "selected_analytics_metric" not in st.session_state:
-        st.session_state.selected_analytics_metric = "Views"
+        st.session_state.selected_analytics_metric = metric_options[0]
     
-    # OVERALL VIEW: show combined totals (currently YouTube-only until other platforms exist)
+    # OVERALL VIEW: show combined totals
     if analytics_view == "overall":
-        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) for m in metric_options}
         # Buttons to open platform-specific analytics
         st.markdown("### Platform Analytics")
         btn_cols = st.columns(3)
@@ -1778,9 +2166,6 @@ def show_analytics_page():
                 st.session_state.selected_platform = "tiktok"
                 st.session_state.analytics_view = "platform"
                 st.rerun()
-    else:
-        # PLATFORM DETAIL (YouTube only for now)
-        metric_totals = {m: int(ts_df_youtube[metric_map[m]].sum()) for m in metric_options}
     
     # Two-tier layout: buttons (labels) on top, value cards below
     st.markdown("""
@@ -1929,8 +2314,20 @@ def show_analytics_page():
     metric_col = metric_map[selected_metric]
     metric_sum = metric_totals[selected_metric]
 
-    # Chart: Spotify-style area chart with smooth line (uses combined = YouTube for now)
-    chart_df = ts_df_youtube.set_index("date")[[metric_col]].rename(columns={metric_col: selected_metric.lower()})
+    # Chart: Platform-specific data preparation
+    if platform == "instagram":
+        # Instagram metrics use different structure
+        chart_df = ts_df_instagram.get(metric_col, pd.DataFrame())
+        if chart_df.empty:
+            st.info(f"No data available for {selected_metric} in the selected date range.")
+            return
+        chart_df = chart_df.set_index("date")[["value"]].rename(columns={"value": selected_metric.lower()})
+    else:
+        # YouTube or overall view
+        if chart_df_base.empty:
+            st.info(f"No data available for {selected_metric} in the selected date range.")
+            return
+        chart_df = chart_df_base.set_index("date")[[metric_col]].rename(columns={metric_col: selected_metric.lower()})
     
     # Apply smooth interpolation using rolling average for Spotify-like curves
     # Use a small window (3 days) to smooth without losing detail
@@ -1995,8 +2392,13 @@ def show_analytics_page():
     prev_start = prev_end - timedelta(days=period_days - 1)
     prev_start_iso = datetime.combine(prev_start, datetime.min.time(), tzinfo=timezone.utc).isoformat()
     prev_end_iso = datetime.combine(prev_end, datetime.max.time(), tzinfo=timezone.utc).isoformat()
-    prev_df = fetch_user_daily_timeseries(u_id, prev_start_iso, prev_end_iso)
-    prev_sum = int(prev_df[metric_col].sum()) if not prev_df.empty else 0
+    
+    if platform == "instagram":
+        prev_df = fetch_instagram_daily_timeseries(u_id, prev_start_iso, prev_end_iso, metric_col)
+        prev_sum = int(prev_df["value"].sum()) if not prev_df.empty else 0
+    else:
+        prev_df = fetch_user_daily_timeseries(u_id, prev_start_iso, prev_end_iso)
+        prev_sum = int(prev_df[metric_col].sum()) if not prev_df.empty else 0
     
     def pct(curr: int, prev: int) -> str:
         if prev == 0:
@@ -2013,25 +2415,143 @@ def show_analytics_page():
     )
 
     # Peak day for selected metric
-    if not ts_df_youtube.empty and ts_df_youtube[metric_col].max() > 0:
-        peak_row = ts_df_youtube.loc[ts_df_youtube[metric_col].idxmax()]
+    if platform == "instagram":
+        if not chart_df.empty and chart_df[selected_metric.lower()].max() > 0:
+            peak_row = chart_df.loc[chart_df[selected_metric.lower()].idxmax()]
+            peak_date = peak_row.name.date() if hasattr(peak_row.name, 'date') else peak_row.name
+            peak_value = int(peak_row[selected_metric.lower()])
+            st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
+    else:
+        if not chart_df_base.empty and chart_df_base[metric_col].max() > 0:
+            peak_row = chart_df_base.loc[chart_df_base[metric_col].idxmax()]
         peak_date = peak_row["date"].date()
         peak_value = int(peak_row[metric_col])
         st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
+
+
+def get_redirect_url() -> str:
+    """Get OAuth redirect URL (reused from auth.py logic)."""
+    # Try secrets first
+    custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL", None)
+    if custom_redirect and str(custom_redirect).strip():
+        return str(custom_redirect).strip().rstrip("/")
+    
+    # Check environment variables
+    streamlit_url = (
+        os.getenv("STREAMLIT_SHARING_BASE_URL") or 
+        os.getenv("STREAMLIT_SERVER_URL") or
+        os.getenv("STREAMLIT_CLOUD_BASE_URL")
+    )
+    if streamlit_url:
+        return streamlit_url.rstrip("/")
+    
+    # Check hostname
+    hostname = os.getenv("HOSTNAME", "")
+    if hostname and "streamlit.app" in hostname.lower():
+        return f"https://{hostname}".rstrip("/")
+    
+    # Default to localhost
+    return "http://localhost:8501"
+
+
+def handle_instagram_oauth_callback(user_id: str, code: str):
+    """Handle Instagram OAuth callback and store tokens.
+    
+    Args:
+        user_id: User ID
+        code: OAuth authorization code
+    """
+    fb_app_id = st.secrets.get("FACEBOOK_APP_ID")
+    fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET")
+    redirect_uri = get_redirect_url()
+    
+    if not fb_app_id or not fb_app_secret:
+        st.error("Facebook App credentials not configured")
+        return
+    
+    with st.spinner("Connecting Instagram account..."):
+        try:
+            # Exchange code for short-lived token
+            # Use base redirect_uri (without query params) for token exchange
+            token_data = exchange_code_for_token(
+                app_id=fb_app_id,
+                app_secret=fb_app_secret,
+                code=code,
+                redirect_uri=redirect_uri  # Base URL only - must match what's in Facebook App settings
+            )
+            
+            if not token_data or "access_token" not in token_data:
+                st.error("Failed to get access token")
+                return
+            
+            short_token = token_data["access_token"]
+            
+            # Exchange for long-lived token
+            long_token_data = get_long_lived_token(
+                short_lived_token=short_token,
+                app_id=fb_app_id,
+                app_secret=fb_app_secret
+            )
+            
+            if not long_token_data:
+                st.error("Failed to get long-lived token")
+                return
+            
+            long_token = long_token_data["access_token"]
+            expires_in = long_token_data.get("expires_in", 5184000)
+            
+            # Get Instagram Business Account ID and username
+            account_info = get_instagram_business_account_id(
+                access_token=long_token
+            )
+            
+            if not account_info or not account_info.get("account_id"):
+                st.error("Could not find Instagram Business Account. Make sure your Facebook Page has an Instagram Business account connected.")
+                return
+            
+            account_id = account_info["account_id"]
+            account_username = account_info.get("username")
+            
+            # Store token
+            success = store_instagram_token(
+                supabase=supabase,
+                user_id=user_id,
+                access_token=long_token,
+                account_id=account_id,
+                expires_in=expires_in,
+                account_username=account_username
+            )
+            
+            if success:
+                st.success("✅ Instagram account connected successfully!")
+                # Clear OAuth query params
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error("Failed to store Instagram token")
+                
+        except Exception as e:
+            st.error(f"Error connecting Instagram: {str(e)}")
 
 
 def show_settings_page():
     st.title("Settings")
     
     # Create tabs for different settings sections
-    tab1, tab2 = st.tabs(["Profile", "Preferences"])
+    # Note: Connections tab added for Instagram OAuth integration
+    tabs_list = ["Profile", "Connections", "Preferences"]
+    tab1, tab2, tab3 = st.tabs(tabs_list)
+    
+    # Ensure all tabs are accessible (this helps with Streamlit rendering)
+    # Tabs are created above, content is in the with blocks below
     
     with tab1:
         # Get current user info
         user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
         if not user_res.data:
             st.error("User not found")
-            return
+            # Don't return here - let other tabs render
+            st.stop()
         
         user = user_res.data[0]
         
@@ -2123,6 +2643,113 @@ def show_settings_page():
                 st.warning("Please enter a valid URL")
     
     with tab2:
+        st.markdown("### Connected Accounts")
+        st.caption("Connect your social media accounts to view analytics")
+        
+        # Get user ID
+        user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
+        if not user_res.data:
+            st.error("User not found")
+            st.stop()  # Stop rendering this tab, but don't prevent other tabs from showing
+        u_id = user_res.data[0]["u_id"]
+        
+        # Instagram Connection Section
+        st.markdown("#### Instagram")
+        
+        # Check if Instagram is connected
+        instagram_account = get_user_instagram_account(supabase, u_id)
+        
+        # Handle OAuth callback for Instagram
+        query_params = st.query_params
+        if "code" in query_params and "state" in query_params:
+            if query_params.get("state") == "instagram_connect":
+                handle_instagram_oauth_callback(u_id, query_params.get("code"))
+        
+        if instagram_account:
+            account_id = instagram_account.get("account_id", "Unknown")
+            username = instagram_account.get("account_username", "Connected")
+            expires_at = instagram_account.get("expires_at")
+            
+            # Check if token is expiring soon
+            token_status = "✅ Active"
+            if expires_at and is_token_expired(expires_at):
+                token_status = "⚠️ Expiring soon"
+            
+            st.success(f"Connected: **{username}** ({account_id})")
+            st.caption(f"Status: {token_status}")
+            
+            if expires_at:
+                try:
+                    expiry_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    if expiry_dt.tzinfo is None:
+                        expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        expiry_dt = expiry_dt.astimezone(timezone.utc)
+                    
+                    days_until_expiry = (expiry_dt - datetime.now(timezone.utc)).days
+                    if days_until_expiry > 0:
+                        st.caption(f"Token expires in {days_until_expiry} days")
+                    else:
+                        st.warning("Token has expired. Please reconnect.")
+                except Exception:
+                    pass
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Refresh Token", key="refresh_ig_token", use_container_width=True):
+                    st.info("Token refresh coming soon. For now, please disconnect and reconnect.")
+            with col2:
+                if st.button("🔌 Disconnect", key="disconnect_ig", use_container_width=True):
+                    if disconnect_instagram_account(supabase, u_id):
+                        st.success("Instagram account disconnected")
+                        st.rerun()
+                    else:
+                        st.error("Failed to disconnect account")
+        else:
+            st.info("Connect your Instagram Business account to view insights")
+            
+            # Check if Facebook App credentials are configured
+            fb_app_id = st.secrets.get("FACEBOOK_APP_ID", None)
+            fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET", None)
+            
+            if not fb_app_id or not fb_app_secret:
+                st.warning("""
+                **Instagram connection requires Facebook App setup:**
+                
+                1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com)
+                2. Add Instagram Graph API product
+                3. Add `FACEBOOK_APP_ID` and `FACEBOOK_APP_SECRET` to `.streamlit/secrets.toml`
+                4. Configure OAuth redirect URI in Facebook App settings
+                """)
+            else:
+                # Generate OAuth URL
+                redirect_uri = get_redirect_url()
+                
+                # Show redirect URI for debugging (helpful for Facebook App setup)
+                with st.expander("🔧 OAuth Configuration (for Facebook App setup)", expanded=False):
+                    st.caption("**Add this exact URL to Facebook App → Settings → Valid OAuth Redirect URIs:**")
+                    st.code(redirect_uri, language=None)
+                    st.caption("⚠️ Make sure it matches exactly (no trailing slash, correct protocol)")
+                    st.info("""
+                    **Steps:**
+                    1. Copy the URL above
+                    2. Go to [Facebook App Settings](https://developers.facebook.com/apps/)
+                    3. Settings → Basic → Valid OAuth Redirect URIs
+                    4. Add the URL exactly as shown
+                    5. Enable "Client OAuth Login" and "Web OAuth Login"
+                    6. Save changes
+                    """)
+                
+                # Note: redirect_uri in OAuth URL should be base URL only (state is added separately)
+                oauth_url = get_instagram_oauth_url(
+                    app_id=fb_app_id,
+                    redirect_uri=redirect_uri  # Base URL only - state parameter handled in callback
+                )
+                
+                # Link button redirects immediately when clicked
+                st.link_button("🔗 Connect Instagram", oauth_url, use_container_width=True)
+    
+    with tab3:
         st.info("Preferences coming soon.")
 
 
