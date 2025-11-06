@@ -221,10 +221,22 @@ supabase: Client = auth_supabase
 # IMPORTANT: Check for OAuth callback BEFORE session validation
 # OAuth callbacks need to be processed first, before we validate existing sessions
 query_params = st.query_params
-is_oauth_callback = "code" in query_params or "error" in query_params
 
-if is_oauth_callback:
-    # OAuth callback in progress - let auth.py handle it
+# Check if this is an Instagram OAuth callback (has state=instagram_connect)
+is_instagram_oauth = (
+    "code" in query_params and 
+    "state" in query_params and 
+    query_params.get("state") == "instagram_connect"
+)
+
+# Check if this is a Supabase OAuth callback (code without Instagram state, or error)
+is_supabase_oauth = (
+    ("code" in query_params or "error" in query_params) and 
+    not is_instagram_oauth
+)
+
+if is_supabase_oauth:
+    # Supabase OAuth callback in progress - let auth.py handle it
     # Clear any stale session state to prevent validation errors
     # The OAuth handler will set the new session after successful exchange
     if "user" in st.session_state:
@@ -236,6 +248,9 @@ if is_oauth_callback:
     # Show login page which will handle the OAuth callback
     show_login()
     st.stop()
+
+# Instagram OAuth callbacks are handled after authentication (user must be logged in)
+# This will be processed later in the Settings page
 
 if "user" not in st.session_state:
     show_login()
@@ -307,6 +322,24 @@ elif oauth_just_completed:
     st.session_state["oauth_just_completed"] = False
 
 normalized_email = user_email.lower()
+
+# Handle Instagram OAuth callback if present (must be after authentication)
+if is_instagram_oauth:
+    # Get user ID for Instagram token storage
+    try:
+        user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
+        if user_res.data and len(user_res.data) > 0:
+            u_id = user_res.data[0]["u_id"]
+            code = query_params.get("code")
+            if code:
+                handle_instagram_oauth_callback(u_id, code)
+                # The callback handler will clear query params and rerun
+                # If it doesn't rerun, we'll continue and the Settings page will also handle it
+    except Exception as e:
+        st.error(f"Error processing Instagram OAuth callback: {str(e)}")
+        # Clear the callback params to prevent infinite loops
+        st.query_params.clear()
+        st.rerun()
 # Logout and login notice now live under the avatar menu in the topbar
 
 # -------------------------------
