@@ -603,35 +603,32 @@ def show_login():
             st.caption(f"Redirect URL that will be sent to Supabase: {redirect_url}")
         
         # Supabase OAuth with dynamic redirect URL
-        # Priority: Use options dict with redirect_to (standard Python client format)
-        # This ensures the redirect URL is explicitly passed to Supabase, overriding the Site URL
         res = None
         last_error = None
         
-        # Format 1: redirect_to in options (snake_case) - Standard Python client format
-        # This is the recommended format and ensures redirect_to is explicitly passed
+        # Format 1: redirect_to as top-level parameter (most likely correct format)
         try:
             res = supabase.auth.sign_in_with_oauth({
                 "provider": "google",
-                "options": {
-                    "redirect_to": redirect_url
-                }
+                "redirect_to": redirect_url
             })
             if debug_mode:
-                st.success(f"✅ OAuth URL generated using redirect_to in options (standard format)")
+                st.success(f"✅ OAuth URL generated using redirect_to (top level)")
         except (TypeError, KeyError, AttributeError, Exception) as e1:
             last_error = e1
-            # Format 2: redirect_to as top-level parameter (fallback for older versions)
+            # Format 2: redirect_to in options (snake_case) - some versions use this
             try:
                 res = supabase.auth.sign_in_with_oauth({
                     "provider": "google",
-                    "redirect_to": redirect_url
+                    "options": {
+                        "redirect_to": redirect_url
+                    }
                 })
                 if debug_mode:
-                    st.success(f"✅ OAuth URL generated using redirect_to (top level, fallback)")
+                    st.success(f"✅ OAuth URL generated using redirect_to (in options)")
             except (TypeError, KeyError, AttributeError, Exception) as e2:
                 last_error = e2
-                # Format 3: redirectTo in options (camelCase) - JS/TS style fallback
+                # Format 3: redirectTo in options (camelCase) - JS/TS style
                 try:
                     res = supabase.auth.sign_in_with_oauth({
                         "provider": "google",
@@ -640,7 +637,7 @@ def show_login():
                         }
                     })
                     if debug_mode:
-                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase, fallback)")
+                        st.success(f"✅ OAuth URL generated using redirectTo (camelCase)")
                 except (TypeError, KeyError, AttributeError, Exception) as e3:
                     last_error = e3
                     raise Exception(f"All redirect parameter formats failed. Last error: {e3}")
