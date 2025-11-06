@@ -2814,28 +2814,28 @@ def show_settings_page():
         else:
             st.info("Connect your Instagram Business account to view insights")
             
-            # Check if Facebook App credentials are configured
-            fb_app_id = st.secrets.get("FACEBOOK_APP_ID", None)
-            fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET", None)
-            
             # Check if we're in developer mode (for developer-only UI messages)
             developer_mode = st.secrets.get("DEVELOPER_MODE", "false").lower() == "true"
             
-            if not fb_app_id or not fb_app_secret:
-                # Show developer-facing message only in developer mode
-                if developer_mode:
-                    st.warning("""
-                    **Instagram connection requires Facebook App setup:**
-                    
-                    1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com)
-                    2. Add Instagram Graph API product
-                    3. Add `FACEBOOK_APP_ID` and `FACEBOOK_APP_SECRET` to `.streamlit/secrets.toml`
-                    4. Configure OAuth redirect URI in Facebook App settings
-                    """)
-                else:
-                    # Generic message for regular users
-                    st.info("Instagram connection is currently unavailable. Please contact support if you need assistance.")
-            else:
+            # Get Facebook App credentials (server-side secrets, always present in production)
+            fb_app_id = st.secrets.get("FACEBOOK_APP_ID", None)
+            fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET", None)
+            
+            # Show developer setup instructions only if secrets are missing AND in developer mode
+            # In production, secrets should always be present, so this message won't show to end users
+            if developer_mode and (not fb_app_id or not fb_app_secret):
+                st.warning("""
+                **Instagram connection requires Facebook App setup:**
+                
+                1. Create a Facebook App at [developers.facebook.com](https://developers.facebook.com)
+                2. Add Instagram Graph API product
+                3. Add `FACEBOOK_APP_ID` and `FACEBOOK_APP_SECRET` to `.streamlit/secrets.toml`
+                4. Configure OAuth redirect URI in Facebook App settings
+                """)
+            
+            # Always show Connect button - secrets are server-side and should always be present in production
+            # Users connect via OAuth using the app's credentials behind the scenes
+            if fb_app_id and fb_app_secret:
                 # Generate OAuth URL
                 redirect_uri = get_redirect_url()
                 
@@ -2855,14 +2855,19 @@ def show_settings_page():
                         6. Save changes
                         """)
                 
-                # Note: redirect_uri in OAuth URL should be base URL only (state is added separately)
+                # Generate OAuth URL and show Connect button
                 oauth_url = get_instagram_oauth_url(
                     app_id=fb_app_id,
                     redirect_uri=redirect_uri  # Base URL only - state parameter handled in callback
                 )
-                
                 # Link button redirects immediately when clicked
                 st.link_button("🔗 Connect Instagram", oauth_url, use_container_width=True)
+            else:
+                # Secrets missing - this should only happen in development
+                # In production, secrets are always present server-side
+                if developer_mode:
+                    st.error("⚠️ Facebook App credentials not configured. Please add FACEBOOK_APP_ID and FACEBOOK_APP_SECRET to secrets.")
+                # Don't show anything to end users if secrets are missing (shouldn't happen in production)
     
     with tab3:
         st.info("Preferences coming soon.")
