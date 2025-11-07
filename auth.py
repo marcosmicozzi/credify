@@ -160,40 +160,43 @@ auth_supabase = supabase
 # -------------------------------
 # REDIRECT URL HELPER
 # -------------------------------
-def get_supabase_redirect_url() -> str:
-    """Get redirect URL for Supabase OAuth.
-    
-    Supabase validates redirect URIs against the configured Site URL and allowed redirect URLs.
-    To support both localhost and production:
-    - Always use production URL for Supabase OAuth (matches Site URL)
-    - This ensures Supabase accepts the redirect regardless of environment
-    - Note: For localhost development, you may be redirected to production after OAuth
-    - The session will work on both domains since tokens are stored in session state
-    
-    IMPORTANT: For best localhost experience, add http://localhost:8501 as an additional
-    redirect URL in Supabase (Settings > Authentication > URL Configuration > Redirect URLs)
-    without changing the Site URL. This allows OAuth to redirect directly to localhost.
-    
-    Returns:
-        str: Production redirect URL for Supabase OAuth
+def _get_production_base_url() -> str:
+    """Resolve the deployed Streamlit Cloud base URL.
+
+    Priority order:
+        1. Explicit `OAUTH_REDIRECT_URL` secret
+        2. `STREAMLIT_SHARING_BASE_URL` env (Streamlit Cloud sets this)
+        3. Optional `PRODUCTION_BASE_URL` secret for overrides
+        4. Fallback to current canonical domain
     """
-    # 1. Check explicit secret configuration (highest priority)
     try:
         custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
         if custom_redirect and str(custom_redirect).strip():
             return str(custom_redirect).strip().rstrip("/")
     except (AttributeError, KeyError):
         pass
-    
-    # 2. Check for Streamlit Cloud (production)
+
     sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
     if sharing_url:
         return sharing_url.rstrip("/")
+
+    try:
+        fallback_secret = st.secrets.get("PRODUCTION_BASE_URL")
+        if fallback_secret and str(fallback_secret).strip():
+            return str(fallback_secret).strip().rstrip("/")
+    except (AttributeError, KeyError):
+        pass
+
+    return "https://credifyappv2.streamlit.app"
+
+
+def get_supabase_redirect_url() -> str:
+    """Get redirect URL for Supabase OAuth.
     
-    # 3. Default to production URL (must match Supabase Site URL)
-    # For localhost development, this ensures Supabase accepts the redirect
-    # The actual redirect will go to production, but the session will work
-    return "https://credifyapp.streamlit.app"
+    Supabase validates redirect URIs against the configured Site URL and allowed redirect URLs.
+    Using the production base URL ensures the redirect always matches the Supabase configuration.
+    """
+    return _get_production_base_url()
 
 
 def get_redirect_url() -> str:
@@ -217,22 +220,8 @@ def get_redirect_url() -> str:
         port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
         return f"http://localhost:{port}"
     
-    # 2. Check explicit secret configuration (for production overrides)
-    try:
-        custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
-        if custom_redirect and str(custom_redirect).strip():
-            return str(custom_redirect).strip().rstrip("/")
-    except (AttributeError, KeyError):
-        # Secret not found or not accessible - continue to other checks
-        pass
-    
-    # 3. Check for Streamlit Cloud (production)
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return sharing_url.rstrip("/")
-    
-    # 4. Default to production domain when uncertain (prevents localhost redirects on cloud)
-    return "https://credifyapp.streamlit.app"
+    # 2. Use the resolved production base URL when not running locally
+    return _get_production_base_url()
 
 
 # -------------------------------
