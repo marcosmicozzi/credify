@@ -10,15 +10,22 @@ def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
 
     Checks multiple indicators in priority order:
-    1. STREAMLIT_SERVER_PORT is set (strong localhost indicator - check FIRST)
-    2. HOSTNAME contains localhost or 127.0.0.1
-    3. STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    4. STREAMLIT_RUNTIME_ENV is ``cloud`` on Streamlit Cloud, ``local`` when running locally
-    5. Default to False if uncertain to avoid leaking production auth flows to localhost
+    1. STREAMLIT_RUNTIME_ENV is ``cloud`` on Streamlit Cloud, ``local`` when running locally
+    2. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
+    3. HOSTNAME contains localhost or 127.0.0.1
+    4. STREAMLIT_SHARING_BASE_URL is set (production indicator)
+    5. Default to True if uncertain so dev flows keep working locally
 
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
     """
+    # 1. STREAMLIT_RUNTIME_ENV is explicit in newer Streamlit builds
+    runtime_env = (os.getenv("STREAMLIT_RUNTIME_ENV", "") or "").lower()
+    if runtime_env in {"cloud", "scc"}:
+        return False
+    if runtime_env == "local":
+        return True
+
     # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
     # This is set when running `streamlit run` locally
     # Must check this first so localhost detection takes priority
@@ -38,15 +45,8 @@ def is_localhost() -> bool:
     if sharing_url:
         return False
 
-    # 4. STREAMLIT_RUNTIME_ENV is "cloud" when running on Streamlit Cloud
-    runtime_env = (os.getenv("STREAMLIT_RUNTIME_ENV", "") or "").lower()
-    if runtime_env in {"cloud", "scc"}:
-        return False
-    if runtime_env == "local":
-        return True
-
-    # 5. Default to production when uncertain to prevent production OAuth flows from redirecting to localhost
-    return False
+    # 4. Default to localhost when uncertain (safer for developer flows)
+    return True
 
 # -------------------------------
 # LOGIN BUTTON STYLING
