@@ -37,7 +37,7 @@ def get_instagram_oauth_url(
             "pages_show_list"  # To list connected pages
         ]
     
-    base_url = "https://www.facebook.com/v18.0/dialog/oauth"
+    base_url = "https://www.facebook.com/v19.0/dialog/oauth"
     
     # Note: redirect_uri should be base URL only (no query params)
     # Facebook will append the state parameter automatically
@@ -103,7 +103,7 @@ def exchange_code_for_token(
     Returns:
         Dict with access_token, token_type, expires_in, or None if failed
     """
-    url = "https://graph.facebook.com/v18.0/oauth/access_token"
+    url = "https://graph.facebook.com/v19.0/oauth/access_token"
     
     params = {
         "client_id": app_id,
@@ -116,7 +116,7 @@ def exchange_code_for_token(
         debug_callback("token_exchange_params", params)
 
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, timeout=10)
 
         if debug_callback:
             debug_callback("token_exchange_status", response.status_code)
@@ -128,7 +128,9 @@ def exchange_code_for_token(
             return None, _format_response_error(response)
         return payload, None
     except requests.exceptions.HTTPError as e:
-        return None, _format_response_error(e.response)
+        raw_text = e.response.text if e.response is not None else ""
+        formatted = _format_response_error(e.response)
+        return None, f"{formatted} | raw={raw_text}" if raw_text else formatted
     except requests.exceptions.RequestException as e:
         return None, str(e)
 
@@ -149,7 +151,7 @@ def get_long_lived_token(
     Returns:
         Dict with access_token and expires_in (seconds), or None if failed
     """
-    url = "https://graph.facebook.com/v18.0/oauth/access_token"
+    url = "https://graph.facebook.com/v19.0/oauth/access_token"
     
     params = {
         "grant_type": "fb_exchange_token",
@@ -162,7 +164,7 @@ def get_long_lived_token(
         debug_callback("long_token_params", params)
 
     try:
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, timeout=10)
 
         if debug_callback:
             debug_callback("long_token_status", response.status_code)
@@ -180,7 +182,9 @@ def get_long_lived_token(
                 "expires_in": data.get("expires_in", 5184000)  # Default 60 days
             }, None
     except requests.exceptions.HTTPError as e:
-        return None, _format_response_error(e.response)
+        raw_text = e.response.text if e.response is not None else ""
+        formatted = _format_response_error(e.response)
+        return None, f"{formatted} | raw={raw_text}" if raw_text else formatted
     except requests.exceptions.RequestException as e:
         return None, str(e)
 
@@ -208,7 +212,7 @@ def get_instagram_business_account_id(
                 "fields": "instagram_business_account{id,username}",
                 "access_token": access_token
             }
-            response = requests.get(url, params=params, timeout=30)
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
             
@@ -228,7 +232,7 @@ def get_instagram_business_account_id(
                 "fields": "id,name,instagram_business_account{id,username}",
                 "access_token": access_token
             }
-            response = requests.get(url, params=params, timeout=30)
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
             
