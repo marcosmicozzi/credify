@@ -7,7 +7,16 @@ import json
 import plotly.graph_objects as go
 import plotly.express as px
 from html import escape
-from auth import show_login, logout_button, supabase as auth_supabase, get_redirect_url, is_localhost  # logout now handled in topbar menu
+import secrets
+from auth import (
+    show_login,
+    logout_button,
+    supabase as auth_supabase,
+    get_redirect_url,
+    is_localhost,
+    get_facebook_app_credentials,
+    get_instagram_redirect_url,
+)  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 from utils.instagram_fetcher import (
     fetch_and_store_instagram_insights,
@@ -2600,9 +2609,8 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
         user_id: User ID
         code: OAuth authorization code
     """
-    fb_app_id = st.secrets.get("FACEBOOK_APP_ID")
-    fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET")
-    redirect_uri = get_redirect_url()
+    fb_app_id, fb_app_secret = get_facebook_app_credentials()
+    redirect_uri = get_instagram_redirect_url()
     
     if not fb_app_id or not fb_app_secret:
         st.error("Facebook App credentials not configured")
@@ -2801,8 +2809,18 @@ def show_settings_page():
         # Handle OAuth callback for Instagram
         query_params = st.query_params
         if "code" in query_params and "state" in query_params:
-            if query_params.get("state") == "instagram_connect":
+            received_state = query_params.get("state")
+            expected_state = st.session_state.get("instagram_oauth_state")
+
+            if expected_state and received_state and secrets.compare_digest(str(received_state), str(expected_state)):
+                # State validated; clear it before handling callback to avoid reuse on rerun
+                st.session_state.pop("instagram_oauth_state", None)
                 handle_instagram_oauth_callback(u_id, query_params.get("code"))
+            else:
+                st.error("Invalid Instagram OAuth state. Please try connecting again.")
+                st.session_state.pop("instagram_oauth_state", None)
+                st.query_params.clear()
+                st.stop()
         
         if instagram_account:
             account_id = instagram_account.get("account_id", "Unknown")
@@ -2850,9 +2868,8 @@ def show_settings_page():
             # Check if we're in developer mode (for developer-only UI messages)
             developer_mode = st.secrets.get("DEVELOPER_MODE", "false").lower() == "true"
             
-            # Get Facebook App credentials (server-side secrets, always present in production)
-            fb_app_id = st.secrets.get("FACEBOOK_APP_ID", None)
-            fb_app_secret = st.secrets.get("FACEBOOK_APP_SECRET", None)
+            # Get Facebook App credentials (server-side secrets/environment, always present in production)
+            fb_app_id, fb_app_secret = get_facebook_app_credentials()
             
             # Show developer setup instructions only if secrets are missing AND in developer mode
             # In production, secrets should always be present, so this message won't show to end users
@@ -2866,12 +2883,16 @@ def show_settings_page():
                 4. Configure OAuth redirect URI in Facebook App settings
                 """)
             
-            # Always show Connect button - secrets are server-side and should always be present in production
-            # Users connect via OAuth using the app's credentials behind the scenes
-            if fb_app_id and fb_app_secret:
-                # Generate OAuth URL
-                redirect_uri = get_redirect_url()
-                
+            # Always show Connect button - app ID must be present; secret validated on callback
+            if fb_app_id:
+                redirect_uri = get_instagram_redirect_url()
+
+                # Ensure state exists for OAuth flow
+                oauth_state = st.session_state.get("instagram_oauth_state")
+                if not oauth_state:
+                    oauth_state = secrets.token_urlsafe(16)
+                    st.session_state["instagram_oauth_state"] = oauth_state
+
                 # Show redirect URI for debugging (helpful for Facebook App setup) - only in developer mode
                 if developer_mode:
                     with st.expander("🔧 OAuth Configuration (for Facebook App setup)", expanded=False):
@@ -2887,13 +2908,15 @@ def show_settings_page():
                         5. Enable "Client OAuth Login" and "Web OAuth Login"
                         6. Save changes
                         """)
-                
-                # Generate OAuth URL and show Connect button
+                        if not fb_app_secret:
+                            st.warning("Facebook App secret is missing. The OAuth callback will fail until it is configured.")
+
                 oauth_url = get_instagram_oauth_url(
                     app_id=fb_app_id,
-                    redirect_uri=redirect_uri  # Base URL only - state parameter handled in callback
+                    redirect_uri=redirect_uri,
+                    state=oauth_state,
                 )
-                # Link button redirects immediately when clicked
+
                 st.link_button("🔗 Connect Instagram", oauth_url, use_container_width=True)
             else:
                 # Secrets missing - this should only happen in development

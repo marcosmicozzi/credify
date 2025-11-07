@@ -3,11 +3,13 @@ import requests
 from typing import Optional, Dict
 from datetime import datetime, timezone, timedelta
 from supabase import Client
+from urllib.parse import urlencode
 
 
 def get_instagram_oauth_url(
     app_id: str,
     redirect_uri: str,
+    state: str,
     scopes: Optional[list] = None
 ) -> str:
     """Generate Instagram OAuth authorization URL.
@@ -36,15 +38,18 @@ def get_instagram_oauth_url(
     
     # Note: redirect_uri should be base URL only (no query params)
     # Facebook will append the state parameter automatically
+    if not state:
+        raise ValueError("state parameter is required for Instagram OAuth")
+
     params = {
         "client_id": app_id,
-        "redirect_uri": redirect_uri,  # Base URL only
+        "redirect_uri": redirect_uri,
         "scope": ",".join(scopes),
         "response_type": "code",
-        "state": "instagram_connect"  # CSRF protection - Facebook will append this
+        "state": state,
     }
-    
-    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+
+    query_string = urlencode(params)
     return f"{base_url}?{query_string}"
 
 

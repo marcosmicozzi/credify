@@ -1,7 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
-from urllib.parse import urlparse, parse_qs
-from typing import Optional
+from urllib.parse import urlparse, parse_qs, urljoin
+from typing import Optional, Tuple
 import os
 
 # -------------------------------
@@ -19,33 +19,78 @@ def is_localhost() -> bool:
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
     """
-    # 1. STREAMLIT_RUNTIME_ENV is explicit in newer Streamlit builds
     runtime_env = (os.getenv("STREAMLIT_RUNTIME_ENV", "") or "").lower()
     if runtime_env in {"cloud", "scc"}:
         return False
     if runtime_env == "local":
         return True
 
-
-    # 2. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
     home_path = os.getenv("HOME", "")
     if home_path.startswith("/home/appuser") or home_path.startswith("/home/adminuser"):
         return False
 
-    # 3. Check STREAMLIT_SERVER_PORT (strongest localhost indicator)
-    # This is set when running `streamlit run` locally
-    # Must check this first so localhost detection takes priority
+    server_address = (os.getenv("STREAMLIT_SERVER_ADDRESS", "") or os.getenv("STREAMLIT_SERVER_HOST", "") or "").lower()
+    if server_address and server_address not in {"localhost", "127.0.0.1", "0.0.0.0"}:
+        return False
+
     server_port = os.getenv("STREAMLIT_SERVER_PORT")
-    if server_port is not None:
-        return True
-    
-    # 4. Check HOSTNAME for localhost indicators
-    hostname = (os.getenv("HOSTNAME", "") or "").lower()
-    if "localhost" in hostname or "127.0.0.1" in hostname:
+    if server_port and server_address in {"", "localhost", "127.0.0.1", "0.0.0.0"}:
         return True
 
-    # Default to localhost when uncertain (safer for developer flows)
-    return True
+    hostname = (os.getenv("HOSTNAME", "") or "").lower()
+    if "localhost" in hostname or "127.0.0.1" in hostname or hostname.endswith(".local"):
+        return True
+
+    return False
+
+
+def _read_secret_or_env(key: str) -> Optional[str]:
+    """Fetch a credential from Streamlit secrets or environment variables."""
+    secret_value: Optional[str] = None
+    try:
+        secret_value = st.secrets.get(key)
+    except (AttributeError, KeyError):
+        secret_value = None
+
+    env_value = os.getenv(key)
+
+    for raw_value in (secret_value, env_value):
+        if raw_value is None:
+            continue
+        value = str(raw_value).strip()
+        if value:
+            return value
+    return None
+
+
+def get_facebook_app_credentials() -> Tuple[Optional[str], Optional[str]]:
+    """Return Facebook App ID and secret with environment fallbacks."""
+    app_id = _read_secret_or_env("FACEBOOK_APP_ID")
+    app_secret = _read_secret_or_env("FACEBOOK_APP_SECRET")
+    return app_id, app_secret
+
+
+def _resolve_instagram_redirect_path() -> str:
+    """Determine the Instagram OAuth redirect path."""
+    path_candidates = []
+    try:
+        path_candidates.append(st.secrets.get("INSTAGRAM_REDIRECT_PATH"))
+    except (AttributeError, KeyError):
+        pass
+
+    path_candidates.append(os.getenv("INSTAGRAM_REDIRECT_PATH"))
+
+    for candidate in path_candidates:
+        if not candidate:
+            continue
+        path = str(candidate).strip()
+        if not path:
+            continue
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return path
+
+    return "/"
 
 # -------------------------------
 # LOGIN BUTTON STYLING
@@ -236,26 +281,39 @@ def get_supabase_redirect_url() -> str:
     return _get_production_base_url()
 
 
-def get_redirect_url() -> str:
-    """Dynamically resolve the correct OAuth redirect URL based on environment.
-    
-    Checks configuration sources in this priority order:
-    1. Localhost detection (if on localhost, always use localhost URL - highest priority for dev)
-    2. Sanitized production base URL from secrets or environment overrides
-    3. Fallback to the canonical deployed Streamlit Cloud domain if uncertain
-    
+def get_redirect_url(path: Optional[str] = None) -> str:
+    """Resolve the correct OAuth redirect URL for the current environment.
+
+    Args:
+        path: Optional path to append to the base URL. When provided, the path
+            is normalized to ensure a leading slash and appended to the base.
+
     Returns:
-        str: Redirect URL for OAuth callbacks
-            - Localhost URL (http://localhost:{port}) if running locally (always wins)
-            - Canonical production URL otherwise
+        str: Redirect URL including the optional path.
     """
-    # 1. Check localhost first - localhost always wins during local development
     if is_localhost():
         port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
-        return f"http://localhost:{port}"
-    
-    # 2. Use the resolved production base URL when not running locally
-    return _get_production_base_url()
+        base_url = f"http://localhost:{port}"
+    else:
+        base_url = _get_production_base_url()
+
+    if not path:
+        return base_url
+
+    normalized_path = str(path).strip()
+    if not normalized_path:
+        return base_url
+
+    if not normalized_path.startswith("/"):
+        normalized_path = f"/{normalized_path}"
+
+    return urljoin(base_url.rstrip("/") + "/", normalized_path.lstrip("/"))
+
+
+def get_instagram_redirect_url() -> str:
+    """Return the configured Instagram OAuth redirect URL."""
+    path = _resolve_instagram_redirect_path()
+    return get_redirect_url(path=path)
 
 
 # -------------------------------
