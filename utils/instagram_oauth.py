@@ -1,9 +1,12 @@
 """Instagram/Meta OAuth integration for multi-user Instagram account connection."""
-import requests
-from typing import Optional, Dict
+import json
+from typing import Optional, Dict, Tuple
 from datetime import datetime, timezone, timedelta
-from supabase import Client
 from urllib.parse import urlencode
+
+import requests
+from requests import Response
+from supabase import Client
 
 
 def get_instagram_oauth_url(
@@ -53,12 +56,41 @@ def get_instagram_oauth_url(
     return f"{base_url}?{query_string}"
 
 
+def _format_response_error(response: Optional[Response]) -> str:
+    if response is None:
+        return "No response received from Meta OAuth endpoint."
+
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            error_obj = payload.get("error")
+            if isinstance(error_obj, dict):
+                message = error_obj.get("message")
+                error_code = error_obj.get("code")
+                error_type = error_obj.get("type")
+                details = " | ".join(
+                    str(part)
+                    for part in [
+                        message,
+                        f"type={error_type}" if error_type else None,
+                        f"code={error_code}" if error_code else None,
+                    ]
+                    if part
+                )
+                if details:
+                    return details
+            return json.dumps(payload)
+        return response.text
+    except ValueError:
+        return response.text
+
+
 def exchange_code_for_token(
     app_id: str,
     app_secret: str,
     code: str,
     redirect_uri: str
-) -> Optional[Dict]:
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Exchange OAuth authorization code for access token.
     
     Args:
@@ -82,17 +114,21 @@ def exchange_code_for_token(
     try:
         response = requests.get(url, params=params, timeout=30)
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("error"):
+            return None, _format_response_error(response)
+        return payload, None
+    except requests.exceptions.HTTPError as e:
+        return None, _format_response_error(e.response)
     except requests.exceptions.RequestException as e:
-        print(f"Error exchanging code for token: {e}")
-        return None
+        return None, str(e)
 
 
 def get_long_lived_token(
     short_lived_token: str,
     app_id: str,
     app_secret: str
-) -> Optional[Dict]:
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Exchange short-lived token for long-lived token (60 days).
     
     Args:
@@ -116,16 +152,21 @@ def get_long_lived_token(
         response = requests.get(url, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
-        
-        if "access_token" in data:
+
+        if isinstance(data, dict) and data.get("error"):
+            return None, _format_response_error(response)
+
+        if isinstance(data, dict) and "access_token" in data:
             return {
                 "access_token": data["access_token"],
                 "expires_in": data.get("expires_in", 5184000)  # Default 60 days
-            }
+            }, None
+    except requests.exceptions.HTTPError as e:
+        return None, _format_response_error(e.response)
     except requests.exceptions.RequestException as e:
-        print(f"Error getting long-lived token: {e}")
-    
-    return None
+        return None, str(e)
+
+    return None, "Unknown error retrieving long-lived token."
 
 
 def get_instagram_business_account_id(

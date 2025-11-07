@@ -2619,31 +2619,36 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
     with st.spinner("Connecting Instagram account..."):
         try:
             # Exchange code for short-lived token
-            # Use base redirect_uri (without query params) for token exchange
-            token_data = exchange_code_for_token(
+            token_data, token_error = exchange_code_for_token(
                 app_id=fb_app_id,
                 app_secret=fb_app_secret,
                 code=code,
-                redirect_uri=redirect_uri  # Base URL only - must match what's in Facebook App settings
+                redirect_uri=redirect_uri
             )
-            
+
+            if token_error:
+                st.error(f"Failed to get access token: {token_error}")
+                st.stop()
             if not token_data or "access_token" not in token_data:
-                st.error("Failed to get access token")
-                return
-            
+                st.error("Failed to get access token: Missing access_token in response.")
+                st.stop()
+
             short_token = token_data["access_token"]
-            
+
             # Exchange for long-lived token
-            long_token_data = get_long_lived_token(
+            long_token_data, long_token_error = get_long_lived_token(
                 short_lived_token=short_token,
                 app_id=fb_app_id,
                 app_secret=fb_app_secret
             )
-            
-            if not long_token_data:
-                st.error("Failed to get long-lived token")
-                return
-            
+
+            if long_token_error:
+                st.error(f"Failed to get long-lived token: {long_token_error}")
+                st.stop()
+            if not long_token_data or "access_token" not in long_token_data:
+                st.error("Failed to get long-lived token: Missing access_token in response.")
+                st.stop()
+
             long_token = long_token_data["access_token"]
             expires_in = long_token_data.get("expires_in", 5184000)
             
@@ -2651,10 +2656,10 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
             account_info = get_instagram_business_account_id(
                 access_token=long_token
             )
-            
+
             if not account_info or not account_info.get("account_id"):
                 st.error("Could not find Instagram Business Account. Make sure your Facebook Page has an Instagram Business account connected.")
-                return
+                st.stop()
             
             account_id = account_info["account_id"]
             account_username = account_info.get("username")
@@ -2676,9 +2681,11 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
                 st.rerun()
             else:
                 st.error("Failed to store Instagram token")
-                
+                st.stop()
+
         except Exception as e:
             st.error(f"Error connecting Instagram: {str(e)}")
+            st.stop()
 
 
 def show_settings_page():
