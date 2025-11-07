@@ -11,10 +11,12 @@ def is_localhost() -> bool:
 
     Checks multiple indicators in priority order:
     1. STREAMLIT_RUNTIME_ENV is ``cloud`` on Streamlit Cloud, ``local`` when running locally
-    2. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
-    3. HOSTNAME contains localhost or 127.0.0.1
-    4. STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    5. Default to True if uncertain so dev flows keep working locally
+    2. STREAMLIT_SHARING_BASE_URL is set (production indicator)
+    3. HOME path indicates Streamlit Cloud runtime (e.g., /home/appuser or /home/adminuser)
+    4. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
+    5. HOSTNAME contains localhost or 127.0.0.1
+    6. STREAMLIT_SERVER_ADDRESS equals localhost/127.0.0.1
+    7. Default to False when uncertain to avoid production flows redirecting locally
 
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
@@ -26,27 +28,33 @@ def is_localhost() -> bool:
     if runtime_env == "local":
         return True
 
-    # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
-    # This is set when running `streamlit run` locally
-    # Must check this first so localhost detection takes priority
-    server_port = os.getenv("STREAMLIT_SERVER_PORT")
-    if server_port is not None:
-        return True
-    
-    # 2. Check HOSTNAME for localhost indicators
-    hostname = (os.getenv("HOSTNAME", "") or "").lower()
-    if "localhost" in hostname or "127.0.0.1" in hostname:
-        return True
-    
-    # 3. Check if STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    # If it's set, we're definitely on Streamlit Cloud (production)
-    # Only check this after confirming we're not on localhost
+    # 2. STREAMLIT_SHARING_BASE_URL is only set on Streamlit Cloud
     sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
     if sharing_url:
         return False
 
-    # 4. Default to localhost when uncertain (safer for developer flows)
-    return True
+    # 3. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
+    home_path = os.getenv("HOME", "")
+    if home_path.startswith("/home/appuser") or home_path.startswith("/home/adminuser"):
+        return False
+
+    # 4. STREAMLIT_SERVER_PORT is set when running `streamlit run` locally
+    server_port = os.getenv("STREAMLIT_SERVER_PORT")
+    if server_port is not None:
+        return True
+
+    # 5. Check HOSTNAME for localhost indicators
+    hostname = (os.getenv("HOSTNAME", "") or "").lower()
+    if "localhost" in hostname or "127.0.0.1" in hostname:
+        return True
+    
+    # 6. STREAMLIT_SERVER_ADDRESS is typically localhost on dev machines
+    server_address = (os.getenv("STREAMLIT_SERVER_ADDRESS", "") or "").lower()
+    if server_address in {"localhost", "127.0.0.1"}:
+        return True
+
+    # 7. Default to production when uncertain to prevent production OAuth flows from redirecting locally
+    return False
 
 # -------------------------------
 # LOGIN BUTTON STYLING
