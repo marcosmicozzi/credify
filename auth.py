@@ -90,7 +90,7 @@ def _resolve_instagram_redirect_path() -> str:
             path = f"/{path}"
         return path
 
-    return "/"
+    return "/auth/callback"
 
 # -------------------------------
 # LOGIN BUTTON STYLING
