@@ -2611,6 +2611,13 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
     """
     fb_app_id, fb_app_secret = get_facebook_app_credentials()
     redirect_uri = get_instagram_redirect_url()
+    debug_instagram = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
+
+    def log_debug(label: str, payload):
+        if debug_instagram:
+            st.write(f"DEBUG - {label}:", payload)
+
+    log_debug("redirect_uri", redirect_uri)
     
     if not fb_app_id or not fb_app_secret:
         st.error("Facebook App credentials not configured")
@@ -2623,7 +2630,8 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
                 app_id=fb_app_id,
                 app_secret=fb_app_secret,
                 code=code,
-                redirect_uri=redirect_uri
+                redirect_uri=redirect_uri,
+                debug_callback=log_debug if debug_instagram else None,
             )
 
             if token_error:
@@ -2639,7 +2647,8 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
             long_token_data, long_token_error = get_long_lived_token(
                 short_lived_token=short_token,
                 app_id=fb_app_id,
-                app_secret=fb_app_secret
+                app_secret=fb_app_secret,
+                debug_callback=log_debug if debug_instagram else None,
             )
 
             if long_token_error:

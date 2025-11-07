@@ -1,6 +1,6 @@
 """Instagram/Meta OAuth integration for multi-user Instagram account connection."""
 import json
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Callable
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
@@ -89,7 +89,8 @@ def exchange_code_for_token(
     app_id: str,
     app_secret: str,
     code: str,
-    redirect_uri: str
+    redirect_uri: str,
+    debug_callback: Optional[Callable[[str, object], None]] = None,
 ) -> Tuple[Optional[Dict], Optional[str]]:
     """Exchange OAuth authorization code for access token.
     
@@ -110,9 +111,17 @@ def exchange_code_for_token(
         "code": code,
         "redirect_uri": redirect_uri
     }
-    
+
+    if debug_callback:
+        debug_callback("token_exchange_params", params)
+
     try:
         response = requests.get(url, params=params, timeout=30)
+
+        if debug_callback:
+            debug_callback("token_exchange_status", response.status_code)
+            debug_callback("token_exchange_text", response.text)
+
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, dict) and payload.get("error"):
@@ -127,7 +136,8 @@ def exchange_code_for_token(
 def get_long_lived_token(
     short_lived_token: str,
     app_id: str,
-    app_secret: str
+    app_secret: str,
+    debug_callback: Optional[Callable[[str, object], None]] = None,
 ) -> Tuple[Optional[Dict], Optional[str]]:
     """Exchange short-lived token for long-lived token (60 days).
     
@@ -147,9 +157,17 @@ def get_long_lived_token(
         "client_secret": app_secret,
         "fb_exchange_token": short_lived_token
     }
-    
+
+    if debug_callback:
+        debug_callback("long_token_params", params)
+
     try:
         response = requests.get(url, params=params, timeout=30)
+
+        if debug_callback:
+            debug_callback("long_token_status", response.status_code)
+            debug_callback("long_token_text", response.text)
+
         response.raise_for_status()
         data = response.json()
 
