@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 from urllib.parse import urlparse, parse_qs
+from typing import Optional
 import os
 
 # -------------------------------
@@ -10,11 +11,10 @@ def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
 
     Checks multiple indicators in priority order:
-    1. STREAMLIT_RUNTIME_ENV is ``cloud`` on Streamlit Cloud, ``local`` when running locally
-    2. STREAMLIT_SERVER_PORT is set (strong localhost indicator)
-    3. HOSTNAME contains localhost or 127.0.0.1
-    4. STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    5. Default to True if uncertain so dev flows keep working locally
+    1. ``STREAMLIT_RUNTIME_ENV`` is ``cloud`` on Streamlit Cloud, ``local`` when running locally
+    2. Streamlit Cloud home directories reside under `/home/appuser` or `/home/adminuser`
+    3. ``STREAMLIT_SERVER_PORT`` is set (strong localhost indicator)
+    4. ``HOSTNAME`` contains localhost or 127.0.0.1
 
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
@@ -27,31 +27,24 @@ def is_localhost() -> bool:
         return True
 
 
-    # 3. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
+    # 2. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
     home_path = os.getenv("HOME", "")
     if home_path.startswith("/home/appuser") or home_path.startswith("/home/adminuser"):
         return False
 
-    # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
+    # 3. Check STREAMLIT_SERVER_PORT (strongest localhost indicator)
     # This is set when running `streamlit run` locally
     # Must check this first so localhost detection takes priority
     server_port = os.getenv("STREAMLIT_SERVER_PORT")
     if server_port is not None:
         return True
     
-    # 2. Check HOSTNAME for localhost indicators
+    # 4. Check HOSTNAME for localhost indicators
     hostname = (os.getenv("HOSTNAME", "") or "").lower()
     if "localhost" in hostname or "127.0.0.1" in hostname:
         return True
-    
-    # 3. Check if STREAMLIT_SHARING_BASE_URL is set (production indicator)
-    # If it's set, we're definitely on Streamlit Cloud (production)
-    # Only check this after confirming we're not on localhost
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return False
 
-    # 4. Default to localhost when uncertain (safer for developer flows)
+    # Default to localhost when uncertain (safer for developer flows)
     return True
 
 # -------------------------------
@@ -166,31 +159,72 @@ auth_supabase = supabase
 # -------------------------------
 # REDIRECT URL HELPER
 # -------------------------------
-def _get_production_base_url() -> str:
-    """Resolve the deployed Streamlit Cloud base URL.
+CANONICAL_PRODUCTION_URL = "https://credifyapp.streamlit.app"
+_ALLOWED_PRODUCTION_HOSTS = {"credifyapp.streamlit.app"}
+_LOCALHOST_HOSTS = {"localhost", "127.0.0.1"}
 
-    Priority order:
-        1. Explicit `OAUTH_REDIRECT_URL` secret
-        2. `STREAMLIT_SHARING_BASE_URL` env (Streamlit Cloud sets this)
-        3. Optional `PRODUCTION_BASE_URL` secret for overrides
-        4. Fallback to current canonical domain
+
+def _normalize_base_url(candidate: Optional[str]) -> Optional[str]:
+    """Validate and normalize a candidate base URL.
+
+    Accepts only localhost variants or the canonical production host.
+    Any `share.streamlit.io` URLs are mapped back to the canonical domain.
     """
+    if not candidate:
+        return None
+
+    value = str(candidate).strip()
+    if not value:
+        return None
+
+    value = value.rstrip("/")
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    host = parsed.hostname
+
+    if not host:
+        return None
+
+    if host in _LOCALHOST_HOSTS:
+        scheme = parsed.scheme or "http"
+        if scheme != "http":
+            scheme = "http"
+        port_suffix = f":{parsed.port}" if parsed.port else ""
+        return f"{scheme}://localhost{port_suffix}"
+
+    if host in _ALLOWED_PRODUCTION_HOSTS:
+        return CANONICAL_PRODUCTION_URL
+
+    if host.endswith("share.streamlit.io"):
+        return CANONICAL_PRODUCTION_URL
+
+    return None
+
+
+def _get_production_base_url() -> str:
+    """Resolve the deployed Streamlit Cloud base URL."""
+    secrets_candidates = []
     try:
-        custom_redirect = st.secrets.get("OAUTH_REDIRECT_URL")
-        if custom_redirect and str(custom_redirect).strip():
-            return str(custom_redirect).strip().rstrip("/")
+        secrets_candidates.append(st.secrets.get("OAUTH_REDIRECT_URL"))
     except (AttributeError, KeyError):
         pass
 
-
     try:
-        fallback_secret = st.secrets.get("PRODUCTION_BASE_URL")
-        if fallback_secret and str(fallback_secret).strip():
-            return str(fallback_secret).strip().rstrip("/")
+        secrets_candidates.append(st.secrets.get("PRODUCTION_BASE_URL"))
     except (AttributeError, KeyError):
         pass
 
-    return "https://credifyapp.streamlit.app"
+    env_candidates = [
+        os.getenv("OAUTH_REDIRECT_URL"),
+        os.getenv("PRODUCTION_BASE_URL"),
+        os.getenv("SITE_URL"),
+    ]
+
+    for candidate in secrets_candidates + env_candidates:
+        normalized = _normalize_base_url(candidate)
+        if normalized:
+            return normalized
+
+    return CANONICAL_PRODUCTION_URL
 
 
 def get_supabase_redirect_url() -> str:
@@ -207,16 +241,13 @@ def get_redirect_url() -> str:
     
     Checks configuration sources in this priority order:
     1. Localhost detection (if on localhost, always use localhost URL - highest priority for dev)
-    2. OAUTH_REDIRECT_URL secret (explicit override for production)
-    3. STREAMLIT_SHARING_BASE_URL environment variable (production indicator)
-    4. Default to deployed Streamlit Cloud domain if uncertain
+    2. Sanitized production base URL from secrets or environment overrides
+    3. Fallback to the canonical deployed Streamlit Cloud domain if uncertain
     
     Returns:
         str: Redirect URL for OAuth callbacks
             - Localhost URL (http://localhost:{port}) if running locally (always wins)
-            - Custom URL if OAUTH_REDIRECT_URL secret is set (production only)
-            - Production URL if STREAMLIT_SHARING_BASE_URL is set
-            - Defaults to the deployed Streamlit Cloud domain if uncertain
+            - Canonical production URL otherwise
     """
     # 1. Check localhost first - localhost always wins during local development
     if is_localhost():
@@ -629,7 +660,6 @@ def show_login():
             is_local = is_localhost()
             st.write("🔍 **Debug - is_localhost():**", is_local)
             st.write("🔍 **Debug - STREAMLIT_SERVER_PORT:**", os.getenv("STREAMLIT_SERVER_PORT"))
-            st.write("🔍 **Debug - STREAMLIT_SHARING_BASE_URL:**", os.getenv("STREAMLIT_SHARING_BASE_URL"))
             st.write("🔍 **Debug - HOSTNAME:**", os.getenv("HOSTNAME"))
             st.write("🔍 **Debug - Redirect URL:**", redirect_url)
             st.write("🔍 **Debug - OAUTH_REDIRECT_URL secret:**", st.secrets.get("OAUTH_REDIRECT_URL", "NOT SET"))
