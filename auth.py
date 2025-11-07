@@ -26,10 +26,6 @@ def is_localhost() -> bool:
     if runtime_env == "local":
         return True
 
-    # 2. STREAMLIT_SHARING_BASE_URL is only set on Streamlit Cloud
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return False
 
     # 3. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
     home_path = os.getenv("HOME", "")
@@ -186,9 +182,6 @@ def _get_production_base_url() -> str:
     except (AttributeError, KeyError):
         pass
 
-    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
-    if sharing_url:
-        return sharing_url.rstrip("/")
 
     try:
         fallback_secret = st.secrets.get("PRODUCTION_BASE_URL")
@@ -197,7 +190,7 @@ def _get_production_base_url() -> str:
     except (AttributeError, KeyError):
         pass
 
-    return "https://credifyappv2.streamlit.app"
+    return "https://credifyapp.streamlit.app"
 
 
 def get_supabase_redirect_url() -> str:
