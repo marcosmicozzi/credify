@@ -8,16 +8,16 @@ import os
 # -------------------------------
 def is_localhost() -> bool:
     """Detect if running on localhost (HTTP) vs production (HTTPS).
-    
+
     Checks multiple indicators in priority order:
     1. STREAMLIT_SERVER_PORT is set (strong localhost indicator - check FIRST)
     2. HOSTNAME contains localhost or 127.0.0.1
-    3. STREAMLIT_SHARING_BASE_URL is NOT set (production sets this)
-    4. Default to True if uncertain (safer for token-based auth)
-    
+    3. STREAMLIT_SHARING_BASE_URL is set (production indicator)
+    4. STREAMLIT_RUNTIME_ENV is ``cloud`` on Streamlit Cloud, ``local`` when running locally
+    5. Default to False if uncertain to avoid leaking production auth flows to localhost
+
     Returns:
         True if running on localhost, False if on production (Streamlit Cloud).
-        Defaults to True if uncertain (safer for token-based auth).
     """
     # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
     # This is set when running `streamlit run` locally
@@ -37,10 +37,16 @@ def is_localhost() -> bool:
     sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
     if sharing_url:
         return False
-    
-    # 4. Default to localhost if uncertain (safer for token-based auth)
-    # This handles cases where none of the indicators are present
-    return True
+
+    # 4. STREAMLIT_RUNTIME_ENV is "cloud" when running on Streamlit Cloud
+    runtime_env = (os.getenv("STREAMLIT_RUNTIME_ENV", "") or "").lower()
+    if runtime_env in {"cloud", "scc"}:
+        return False
+    if runtime_env == "local":
+        return True
+
+    # 5. Default to production when uncertain to prevent production OAuth flows from redirecting to localhost
+    return False
 
 # -------------------------------
 # LOGIN BUTTON STYLING
@@ -197,14 +203,14 @@ def get_redirect_url() -> str:
     1. Localhost detection (if on localhost, always use localhost URL - highest priority for dev)
     2. OAUTH_REDIRECT_URL secret (explicit override for production)
     3. STREAMLIT_SHARING_BASE_URL environment variable (production indicator)
-    4. Default to localhost if uncertain
+    4. Default to deployed Streamlit Cloud domain if uncertain
     
     Returns:
         str: Redirect URL for OAuth callbacks
             - Localhost URL (http://localhost:{port}) if running locally (always wins)
             - Custom URL if OAUTH_REDIRECT_URL secret is set (production only)
             - Production URL if STREAMLIT_SHARING_BASE_URL is set
-            - Defaults to http://localhost:8501 if uncertain
+            - Defaults to the deployed Streamlit Cloud domain if uncertain
     """
     # 1. Check localhost first - localhost always wins during local development
     if is_localhost():
@@ -225,9 +231,8 @@ def get_redirect_url() -> str:
     if sharing_url:
         return sharing_url.rstrip("/")
     
-    # 4. Default to localhost (fallback)
-    port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
-    return f"http://localhost:{port}"
+    # 4. Default to production domain when uncertain (prevents localhost redirects on cloud)
+    return "https://credifyapp.streamlit.app"
 
 
 # -------------------------------
