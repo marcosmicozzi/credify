@@ -26,6 +26,16 @@ def is_localhost() -> bool:
     if runtime_env == "local":
         return True
 
+    # 2. STREAMLIT_SHARING_BASE_URL is only set on Streamlit Cloud
+    sharing_url = os.getenv("STREAMLIT_SHARING_BASE_URL", "").strip()
+    if sharing_url:
+        return False
+
+    # 3. Streamlit Cloud home directories reside under /home/appuser or /home/adminuser
+    home_path = os.getenv("HOME", "")
+    if home_path.startswith("/home/appuser") or home_path.startswith("/home/adminuser"):
+        return False
+
     # 1. Check STREAMLIT_SERVER_PORT first (strongest localhost indicator)
     # This is set when running `streamlit run` locally
     # Must check this first so localhost detection takes priority
