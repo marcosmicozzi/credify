@@ -2870,6 +2870,10 @@ def show_settings_page():
             
             # Get Facebook App credentials (server-side secrets/environment, always present in production)
             fb_app_id, fb_app_secret = get_facebook_app_credentials()
+
+            # Temporary diagnostics for production debugging
+            st.write("DEBUG - Facebook App ID:", fb_app_id)
+            st.write("DEBUG - App Secret present:", bool(fb_app_secret))
             
             # Show developer setup instructions only if secrets are missing AND in developer mode
             # In production, secrets should always be present, so this message won't show to end users
