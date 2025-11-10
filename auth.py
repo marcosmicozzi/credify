@@ -272,6 +272,58 @@ def _get_production_base_url() -> str:
     return CANONICAL_PRODUCTION_URL
 
 
+def _get_local_override_base_url() -> Optional[str]:
+    """Allow developers to override redirect base when testing on non-local hosts."""
+    candidates: list[Optional[str]] = []
+    try:
+        candidates.append(st.secrets.get("OAUTH_REDIRECT_URL"))
+    except (AttributeError, KeyError):
+        pass
+
+    try:
+        candidates.append(st.secrets.get("PRODUCTION_BASE_URL"))
+    except (AttributeError, KeyError):
+        pass
+
+    candidates.extend(
+        [
+            os.getenv("OAUTH_REDIRECT_URL"),
+            os.getenv("PRODUCTION_BASE_URL"),
+            os.getenv("SITE_URL"),
+        ]
+    )
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        value = str(candidate).strip()
+        if not value:
+            continue
+
+        parsed = urlparse(value if "://" in value else f"http://{value}")
+        if not parsed.scheme:
+            continue
+
+        scheme = parsed.scheme.lower()
+        if scheme not in {"http", "https"}:
+            continue
+
+        host = parsed.hostname
+        if not host:
+            continue
+
+        port_suffix = f":{parsed.port}" if parsed.port else ""
+        base = f"{scheme}://{host}{port_suffix}"
+
+        path = parsed.path.rstrip("/")
+        if path:
+            base = f"{base}{path}"
+        return base
+
+    return None
+
+
 def get_supabase_redirect_url() -> str:
     """Get redirect URL for Supabase OAuth.
     
@@ -291,9 +343,15 @@ def get_redirect_url(path: Optional[str] = None) -> str:
     Returns:
         str: Redirect URL including the optional path.
     """
-    if is_localhost():
-        port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
-        base_url = f"http://localhost:{port}"
+    is_local = is_localhost()
+
+    if is_local:
+        override_base = _get_local_override_base_url()
+        if override_base:
+            base_url = override_base
+        else:
+            port = os.getenv("STREAMLIT_SERVER_PORT", "8501")
+            base_url = f"http://localhost:{port}"
     else:
         base_url = _get_production_base_url()
 
