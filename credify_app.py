@@ -16,6 +16,10 @@ from auth import (
     is_localhost,
     get_facebook_app_credentials,
     get_instagram_redirect_url,
+    create_instagram_oauth_state,
+    resolve_instagram_oauth_state,
+    clear_instagram_oauth_state,
+    restore_supabase_session_from_db,
 )  # logout now handled in topbar menu
 from supabase_utils import get_following, is_following, follow_user, unfollow_user, search_users
 from utils.instagram_fetcher import (
@@ -33,6 +37,7 @@ from utils.instagram_oauth import (
     disconnect_instagram_account,
     is_token_expired
 )
+from auth import get_service_supabase_client
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -230,13 +235,62 @@ supabase: Client = auth_supabase
 # IMPORTANT: Check for OAuth callback BEFORE session validation
 # OAuth callbacks need to be processed first, before we validate existing sessions
 query_params = st.query_params
+instagram_state_value = query_params.get("state")
+instagram_code_value = query_params.get("code")
 
-# Check if this is an Instagram OAuth callback (has state=instagram_connect)
+# Check if this is an Instagram OAuth callback (state begins with instagram_connect)
 is_instagram_oauth = (
-    "code" in query_params and 
-    "state" in query_params and 
-    query_params.get("state") == "instagram_connect"
+    instagram_code_value is not None
+    and instagram_state_value is not None
+    and str(instagram_state_value).startswith("instagram_connect")
 )
+
+# Debug initial detection for Instagram/Supabase callbacks
+try:
+    if instagram_code_value is not None or "state" in query_params:
+        print(
+            "[Instagram OAuth] detection",
+            {
+                "query_params": dict(query_params),
+                "is_instagram_oauth": is_instagram_oauth,
+            },
+        )
+except Exception:
+    pass
+
+# Attempt to resolve Instagram OAuth state and rehydrate session before auth guard
+instagram_state_owner_id: str | None = None
+instagram_state_error: str | None = None
+if is_instagram_oauth:
+    # Persist the authorization code immediately so reruns don't lose it
+    st.session_state["instagram_oauth_code"] = instagram_code_value
+    instagram_state_owner_id = resolve_instagram_oauth_state(instagram_state_value)
+    if instagram_state_owner_id:
+        st.session_state["instagram_state_u_id"] = instagram_state_owner_id
+        restore_flag_key = f"instagram_session_restored::{instagram_state_value}"
+        print(
+            "[Instagram OAuth] state_resolved",
+            {
+                "state": instagram_state_value,
+                "owner_id": instagram_state_owner_id,
+                "restore_flag": st.session_state.get(restore_flag_key),
+                "has_user": "user" in st.session_state,
+            },
+        )
+        if "user" not in st.session_state and not st.session_state.get(restore_flag_key):
+            if restore_supabase_session_from_db(instagram_state_owner_id):
+                st.session_state[restore_flag_key] = True
+                print("[Instagram OAuth] session_restored", {"restore_flag": st.session_state.get(restore_flag_key), "has_user": "user" in st.session_state})
+            else:
+                instagram_state_error = "Could not restore your Supabase session for the Instagram callback. Please log in again before reconnecting."
+    else:
+        instagram_state_error = "Instagram OAuth state is invalid or expired. Please start the connection again from Settings → Connections."
+
+if instagram_state_error:
+    st.session_state["instagram_oauth_error"] = instagram_state_error
+else:
+    if "instagram_oauth_error" in st.session_state:
+        del st.session_state["instagram_oauth_error"]
 
 # Check if this is a Supabase OAuth callback (code without Instagram state, or error)
 is_supabase_oauth = (
@@ -262,6 +316,7 @@ if is_supabase_oauth:
 # This will be processed later in the Settings page
 
 if "user" not in st.session_state:
+    print("[Instagram OAuth] user_missing_show_login", {"has_user": False, "instagram_state": instagram_state_value})
     show_login()
     st.stop()
 
@@ -336,14 +391,48 @@ normalized_email = user_email.lower()
 if is_instagram_oauth:
     # Get user ID for Instagram token storage
     try:
-        user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).execute()
-        if user_res.data and len(user_res.data) > 0:
-            u_id = user_res.data[0]["u_id"]
-            code = query_params.get("code")
-            if code:
-                handle_instagram_oauth_callback(u_id, code)
-                # The callback handler will clear query params and rerun
-                # If it doesn't rerun, we'll continue and the Settings page will also handle it
+        code = st.session_state.get("instagram_oauth_code")
+        if not code:
+            st.error("Instagram callback missing authorization code. Please try connecting again.")
+            st.query_params.clear()
+            st.rerun()
+
+        current_u_id = st.session_state.get("credify_user_id")
+        if not current_u_id:
+            user_res = supabase.table("users").select("u_id").eq("u_email", normalized_email).limit(1).execute()
+            if user_res.data:
+                current_u_id = user_res.data[0]["u_id"]
+
+        state_owner_id = instagram_state_owner_id or st.session_state.get("instagram_state_u_id")
+        print("[Instagram OAuth] processing_callback", {"current_u_id": current_u_id, "state_owner_id": state_owner_id})
+        if state_owner_id and current_u_id and state_owner_id != current_u_id:
+            clear_instagram_oauth_state(instagram_state_value)
+            st.error("Instagram OAuth callback does not match the logged-in user. Please reconnect from Settings → Connections.")
+            st.query_params.clear()
+            st.rerun()
+
+        if not current_u_id and state_owner_id:
+            current_u_id = state_owner_id
+
+        if current_u_id:
+            clear_instagram_oauth_state(instagram_state_value)
+            if "instagram_state_u_id" in st.session_state:
+                del st.session_state["instagram_state_u_id"]
+            if "instagram_oauth_error" in st.session_state:
+                del st.session_state["instagram_oauth_error"]
+            restore_flag_key = f"instagram_session_restored::{instagram_state_value}"
+            if restore_flag_key in st.session_state:
+                del st.session_state[restore_flag_key]
+            # Clear stored code once we're about to use it
+            code_from_state = st.session_state.pop("instagram_oauth_code", code)
+            print("[Instagram OAuth] invoking_handler", {"current_u_id": current_u_id})
+            handle_instagram_oauth_callback(current_u_id, code_from_state)
+            # The callback handler will clear query params and rerun
+            # If it doesn't rerun, we'll continue and the Settings page will also handle it
+        else:
+            st.error("Could not resolve your account for Instagram callback. Please reconnect after logging in again.")
+            st.query_params.clear()
+            st.rerun()
     except Exception as e:
         st.error(f"Error processing Instagram OAuth callback: {str(e)}")
         # Clear the callback params to prevent infinite loops
@@ -2609,11 +2698,14 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
         user_id: User ID
         code: OAuth authorization code
     """
+    print("[Instagram OAuth] handler_start", {"user_id": user_id, "code_present": bool(code), "code_prefix": (code[:6] + "..." if code else None)})
+
     fb_app_id, fb_app_secret = get_facebook_app_credentials()
     redirect_uri = get_instagram_redirect_url()
     debug_instagram = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
 
     def log_debug(label: str, payload):
+        print(f"[Instagram OAuth] {label}: {payload}")
         if debug_instagram:
             st.write(f"DEBUG - {label}:", payload)
 
@@ -2633,6 +2725,13 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
                 redirect_uri=redirect_uri,
                 debug_callback=log_debug if debug_instagram else None,
             )
+            log_debug(
+                "short_token_exchange",
+                {
+                    "error": token_error,
+                    "has_token": bool(token_data and token_data.get("access_token")),
+                },
+            )
 
             if token_error:
                 st.error(f"Failed to get access token: {token_error}")
@@ -2643,12 +2742,21 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
 
             short_token = token_data["access_token"]
 
+            log_debug("short_token", short_token[:6] + "..." if short_token else None)
+
             # Exchange for long-lived token
             long_token_data, long_token_error = get_long_lived_token(
                 short_lived_token=short_token,
                 app_id=fb_app_id,
                 app_secret=fb_app_secret,
                 debug_callback=log_debug if debug_instagram else None,
+            )
+            log_debug(
+                "long_token_exchange",
+                {
+                    "error": long_token_error,
+                    "has_token": bool(long_token_data and long_token_data.get("access_token")),
+                },
             )
 
             if long_token_error:
@@ -2659,12 +2767,14 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
                 st.stop()
 
             long_token = long_token_data["access_token"]
+            log_debug("long_token", long_token[:6] + "..." if long_token else None)
             expires_in = long_token_data.get("expires_in", 5184000)
             
             # Get Instagram Business Account ID and username
             account_info = get_instagram_business_account_id(
                 access_token=long_token
             )
+            log_debug("account_info", account_info)
 
             if not account_info or not account_info.get("account_id"):
                 st.error("Could not find Instagram Business Account. Make sure your Facebook Page has an Instagram Business account connected.")
@@ -2674,14 +2784,17 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
             account_username = account_info.get("username")
             
             # Store token
+            token_client = get_service_supabase_client()
+            log_debug("using_service_client", token_client is not None)
             success = store_instagram_token(
-                supabase=supabase,
+                supabase=token_client or supabase,
                 user_id=user_id,
                 access_token=long_token,
                 account_id=account_id,
                 expires_in=expires_in,
                 account_username=account_username
             )
+            log_debug("store_token_success", success)
             
             if success:
                 st.success("✅ Instagram account connected successfully!")
@@ -2826,17 +2939,34 @@ def show_settings_page():
         query_params = st.query_params
         if "code" in query_params and "state" in query_params:
             received_state = query_params.get("state")
-            expected_state = st.session_state.get("instagram_oauth_state")
+            state_owner_id = resolve_instagram_oauth_state(received_state)
 
-            if expected_state and received_state and secrets.compare_digest(str(received_state), str(expected_state)):
-                # State validated; clear it before handling callback to avoid reuse on rerun
-                st.session_state.pop("instagram_oauth_state", None)
-                handle_instagram_oauth_callback(u_id, query_params.get("code"))
-            else:
-                st.error("Invalid Instagram OAuth state. Please try connecting again.")
-                st.session_state.pop("instagram_oauth_state", None)
+            if not state_owner_id:
+                st.error("Instagram OAuth state is invalid or expired. Please try connecting again.")
+                if "instagram_oauth_state" in st.session_state:
+                    del st.session_state["instagram_oauth_state"]
                 st.query_params.clear()
                 st.stop()
+
+            if state_owner_id != u_id:
+                clear_instagram_oauth_state(received_state)
+                st.error("Instagram OAuth callback does not match the current user session.")
+                if "instagram_oauth_state" in st.session_state:
+                    del st.session_state["instagram_oauth_state"]
+                st.query_params.clear()
+                st.stop()
+
+            clear_instagram_oauth_state(received_state)
+            if "instagram_oauth_state" in st.session_state:
+                del st.session_state["instagram_oauth_state"]
+            if "instagram_oauth_error" in st.session_state:
+                del st.session_state["instagram_oauth_error"]
+            restore_flag_key = f"instagram_session_restored::{received_state}"
+            if restore_flag_key in st.session_state:
+                del st.session_state[restore_flag_key]
+            code_from_state = st.session_state.pop("instagram_oauth_code", query_params.get("code"))
+            print("[Instagram OAuth] invoking_handler_settings_tab", {"u_id": u_id})
+            handle_instagram_oauth_callback(u_id, code_from_state)
         
         if instagram_account:
             account_id = instagram_account.get("account_id", "Unknown")
@@ -2911,8 +3041,16 @@ def show_settings_page():
                 # Ensure state exists for OAuth flow
                 oauth_state = st.session_state.get("instagram_oauth_state")
                 if not oauth_state:
-                    oauth_state = secrets.token_urlsafe(16)
-                    st.session_state["instagram_oauth_state"] = oauth_state
+                    oauth_state = create_instagram_oauth_state(u_id)
+                    if oauth_state:
+                        st.session_state["instagram_oauth_state"] = oauth_state
+
+                if not oauth_state:
+                    if st.secrets.get("SUPABASE_SERVICE_KEY"):
+                        st.error("Could not prepare Instagram OAuth state. Please try again in a moment.")
+                    else:
+                        st.error("Supabase service key missing. Add SUPABASE_SERVICE_KEY to secrets to enable Instagram connections.")
+                    st.stop()
 
                 # Show redirect URI for debugging (helpful for Facebook App setup) - only in developer mode
                 if developer_mode:

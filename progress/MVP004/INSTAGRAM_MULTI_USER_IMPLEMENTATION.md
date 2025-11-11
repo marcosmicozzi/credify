@@ -150,6 +150,34 @@ FACEBOOK_APP_SECRET = "app_secret"
 4. **Verify insights** fetch correctly
 5. **Test with multiple users**
 6. **Monitor token expiry** and plan refresh strategy
+7. **Enable session restoration** by provisioning the `user_session_tokens` and `oauth_states` tables (see Supabase checklist below) and adding `SUPABASE_SERVICE_KEY` to `.streamlit/secrets.toml`
+
+### Supabase session tables
+
+Add the following tables (with RLS scoped to the authenticated user) and ensure the app has access to a service-role client (`SUPABASE_SERVICE_KEY`) for managing them:
+
+```
+-- Stores Supabase refresh/access tokens per Credify user id
+create table if not exists user_session_tokens (
+  u_id uuid primary key references users(u_id) on delete cascade,
+  refresh_token text not null,
+  access_token text,
+  updated_at timestamptz default timezone('utc', now())
+);
+
+-- Short-lived Instagram OAuth state lookups
+create table if not exists oauth_states (
+  state text primary key,
+  u_id uuid not null references users(u_id) on delete cascade,
+  created_at timestamptz default timezone('utc', now()),
+  expires_at timestamptz
+);
+```
+
+Recommended RLS policies:
+
+- `user_session_tokens`: allow `select`, `insert`, `update`, `delete` where `auth.uid() = u_id`.
+- `oauth_states`: allow `select`, `insert`, `delete` where `auth.uid() = u_id`. Optionally permit `delete` without auth for cron cleanup.
 
 ## Testing
 

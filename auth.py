@@ -2,6 +2,8 @@ import streamlit as st
 from supabase import create_client, Client
 from urllib.parse import urlparse, parse_qs, urljoin
 from typing import Optional, Tuple
+from datetime import datetime, timezone, timedelta
+import secrets
 import os
 
 # -------------------------------
@@ -90,7 +92,10 @@ def _resolve_instagram_redirect_path() -> str:
             path = f"/{path}"
         return path
 
-    return "/auth/callback"
+    # Streamlit starts a fresh session when the URL path changes.
+    # To preserve session_state (and Supabase tokens) across the OAuth redirect,
+    # default to the root path so Meta redirects back to the main app URL.
+    return "/"
 
 # -------------------------------
 # LOGIN BUTTON STYLING
@@ -122,10 +127,15 @@ a.stLinkButton:hover,
 # -------------------------------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing Supabase credentials. Please set SUPABASE_URL and SUPABASE_ANON_KEY in .streamlit/secrets.toml")
     st.stop()
+
+USER_SESSION_TABLE = "user_session_tokens"
+OAUTH_STATE_TABLE = "oauth_states"
+OAUTH_STATE_TTL_MINUTES = 15
 
 # Create a single shared Supabase client instance
 # Store in session state to persist across reruns during OAuth flow
@@ -133,6 +143,30 @@ if "supabase_client" not in st.session_state:
     st.session_state.supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase: Client = st.session_state.supabase_client
+
+if SUPABASE_SERVICE_KEY and "supabase_service_client" not in st.session_state:
+    try:
+        st.session_state.supabase_service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    except Exception as service_client_error:
+        st.warning(f"⚠️ Could not initialize Supabase service client: {service_client_error}")
+
+service_supabase: Optional[Client] = st.session_state.get("supabase_service_client")
+
+
+def get_service_supabase_client() -> Optional[Client]:
+    """Return a Supabase client authenticated with the service role key."""
+    if "supabase_service_client" in st.session_state and st.session_state.supabase_service_client:
+        return st.session_state.supabase_service_client
+
+    if not SUPABASE_SERVICE_KEY:
+        return None
+
+    try:
+        st.session_state.supabase_service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        return st.session_state.supabase_service_client
+    except Exception as service_client_error:
+        st.warning(f"⚠️ Could not initialize Supabase service client: {service_client_error}")
+        return None
 
 if "supabase_access_token" in st.session_state and "supabase_refresh_token" in st.session_state:
     try:
@@ -377,21 +411,250 @@ def get_instagram_redirect_url() -> str:
 # -------------------------------
 # USER SYNC HELPER
 # -------------------------------
-def ensure_user_in_db(user):
+def ensure_user_in_db(user) -> Optional[str]:
     """Ensures a Supabase Auth user has a matching record in the users table."""
     try:
         user_email = user.email.lower()
         user_name = user.email.split("@")[0]
 
-        existing = supabase.table("users").select("*").eq("u_email", user_email).execute()
-        if not existing.data:
-            supabase.table("users").insert({
+        existing = (
+            supabase.table("users")
+            .select("u_id")
+            .eq("u_email", user_email)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return existing.data[0].get("u_id")
+
+        inserted = (
+            supabase.table("users")
+            .insert({
                 "u_email": user_email,
                 "u_name": user_name,
                 "u_bio": ""
-            }).execute()
+            })
+            .select("u_id")
+            .execute()
+        )
+        if inserted.data:
+            return inserted.data[0].get("u_id")
     except Exception as e:
         st.warning(f"⚠️ Could not sync user to database: {e}")
+    return None
+
+
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _fetch_stored_session_tokens(u_id: str) -> Optional[dict]:
+    if not u_id:
+        return None
+    client = get_service_supabase_client()
+    if client is None:
+        st.warning("⚠️ Supabase service client not configured; cannot fetch stored session tokens securely.")
+        return None
+    try:
+        result = (
+            client.table(USER_SESSION_TABLE)
+            .select("access_token, refresh_token")
+            .eq("u_id", u_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch stored session tokens: {e}")
+    return None
+
+
+def store_supabase_session_tokens(u_id: Optional[str], access_token: Optional[str], refresh_token: Optional[str]) -> None:
+    """Persist Supabase session tokens so they can be restored after cold starts."""
+    if not u_id or not refresh_token:
+        return
+    client = get_service_supabase_client()
+    if client is None:
+        st.warning("⚠️ Supabase service client not configured; skipping session token persistence.")
+        return
+
+    payload = {
+        "u_id": u_id,
+        "refresh_token": refresh_token,
+        "updated_at": _now_utc_iso(),
+    }
+    if access_token:
+        payload["access_token"] = access_token
+
+    try:
+        client.table(USER_SESSION_TABLE).upsert(payload, on_conflict="u_id").execute()
+    except Exception as e:
+        st.warning(f"⚠️ Could not persist Supabase session tokens: {e}")
+
+
+def restore_supabase_session_from_db(u_id: str) -> bool:
+    """Rehydrate Supabase auth session from stored refresh token for the given user id."""
+    print("[Instagram OAuth] restore_session_start", {"u_id": u_id})
+    stored_tokens = _fetch_stored_session_tokens(u_id)
+    if not stored_tokens:
+        print("[Instagram OAuth] restore_session_tokens_missing", {"u_id": u_id})
+        return False
+
+    refresh_token = stored_tokens.get("refresh_token")
+    if not refresh_token:
+        print("[Instagram OAuth] restore_session_no_refresh", {"u_id": u_id})
+        return False
+
+    try:
+        supabase.auth.refresh_session(str(refresh_token))
+    except Exception as refresh_error:
+        st.warning(f"⚠️ Failed to refresh Supabase session: {refresh_error}")
+        print("[Instagram OAuth] restore_session_refresh_failed", {"u_id": u_id, "error": str(refresh_error)})
+        return False
+
+    # Fetch the latest session and user objects
+    access_token = None
+    try:
+        current_session = supabase.auth.get_session()
+        if current_session:
+            if hasattr(current_session, "access_token"):
+                access_token = current_session.access_token
+            elif isinstance(current_session, dict):
+                access_token = current_session.get("access_token")
+            if hasattr(current_session, "refresh_token") and current_session.refresh_token:
+                refresh_token = current_session.refresh_token
+            elif isinstance(current_session, dict) and current_session.get("refresh_token"):
+                refresh_token = current_session.get("refresh_token")
+    except Exception:
+        pass
+
+    if access_token and refresh_token:
+        try:
+            supabase.auth.set_session({"access_token": access_token, "refresh_token": refresh_token})
+        except Exception:
+            pass
+
+    user_obj = None
+    try:
+        user_response = supabase.auth.get_user()
+        if user_response:
+            if hasattr(user_response, "user") and user_response.user:
+                user_obj = user_response.user
+            elif isinstance(user_response, dict) and "user" in user_response:
+                user_obj = user_response["user"]
+            else:
+                user_obj = user_response
+    except Exception:
+        print("[Instagram OAuth] restore_session_get_user_failed", {"u_id": u_id})
+        return False
+
+    if not user_obj or not getattr(user_obj, "email", None):
+        print("[Instagram OAuth] restore_session_invalid_user", {"u_id": u_id})
+        return False
+
+    st.session_state["user"] = user_obj
+    st.session_state["supabase_refresh_token"] = refresh_token
+    if access_token:
+        st.session_state["supabase_access_token"] = access_token
+
+    db_user_id = ensure_user_in_db(user_obj) or u_id
+    st.session_state["credify_user_id"] = db_user_id
+    store_supabase_session_tokens(db_user_id, access_token, refresh_token)
+    print("[Instagram OAuth] restore_session_success", {"u_id": u_id, "db_user_id": db_user_id})
+    return True
+
+
+def _normalize_instagram_state(state: str) -> Optional[str]:
+    if not state:
+        return None
+    state = str(state).strip()
+    if not state:
+        return None
+    if state.startswith("instagram_connect::"):
+        return state
+    if state == "instagram_connect":
+        return None
+    return None
+
+
+def create_instagram_oauth_state(u_id: str) -> Optional[str]:
+    """Generate and persist an Instagram OAuth state token for the given user."""
+    if not u_id:
+        return None
+    client = get_service_supabase_client()
+    if client is None:
+        st.warning("⚠️ Supabase service client not configured; cannot create Instagram OAuth state.")
+        return None
+
+    nonce = secrets.token_urlsafe(32)
+    state = f"instagram_connect::{nonce}"
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=OAUTH_STATE_TTL_MINUTES)).isoformat()
+
+    try:
+        client.table(OAUTH_STATE_TABLE).upsert(
+            {
+                "state": state,
+                "u_id": u_id,
+                "expires_at": expires_at,
+                "created_at": _now_utc_iso(),
+            },
+            on_conflict="state",
+        ).execute()
+    except Exception as e:
+        st.warning(f"⚠️ Could not persist Instagram OAuth state: {e}")
+        return None
+
+    return state
+
+
+def resolve_instagram_oauth_state(state: Optional[str]) -> Optional[str]:
+    """Validate and resolve an Instagram OAuth state token to its user id."""
+    normalized = _normalize_instagram_state(state or "")
+    if not normalized:
+        return None
+    client = get_service_supabase_client()
+    if client is None:
+        st.warning("⚠️ Supabase service client not configured; cannot resolve Instagram OAuth state.")
+        return None
+
+    try:
+        result = (
+            client.table(OAUTH_STATE_TABLE)
+            .select("u_id, expires_at")
+            .eq("state", normalized)
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            return None
+        record = result.data[0]
+        expires_at = record.get("expires_at")
+        if expires_at:
+            try:
+                expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if expires_dt < datetime.now(timezone.utc):
+                    return None
+            except Exception:
+                pass
+        return record.get("u_id")
+    except Exception as e:
+        st.warning(f"⚠️ Could not resolve Instagram OAuth state: {e}")
+        return None
+
+
+def clear_instagram_oauth_state(state: Optional[str]) -> None:
+    normalized = _normalize_instagram_state(state or "")
+    if not normalized:
+        return
+    client = get_service_supabase_client()
+    if client is None:
+        return
+    try:
+        client.table(OAUTH_STATE_TABLE).delete().eq("state", normalized).execute()
+    except Exception:
+        # Best effort cleanup
+        pass
 
 
 # -------------------------------
@@ -442,7 +705,11 @@ def show_login():
 
     # --- Handle OAuth redirect ---
     query_params = st.query_params
-    if "code" in query_params or "error" in query_params:
+    state_value = query_params.get("state")
+    is_instagram_oauth = isinstance(state_value, str) and state_value.startswith("instagram_connect")
+    instagram_oauth_error = st.session_state.get("instagram_oauth_error")
+
+    if not is_instagram_oauth and ("code" in query_params or "error" in query_params):
         # Check for OAuth errors first
         if "error" in query_params:
             error_msg = query_params.get("error_description", query_params.get("error", "Unknown OAuth error"))
@@ -644,6 +911,30 @@ def show_login():
                 if refresh_token:
                     st.session_state["supabase_refresh_token"] = refresh_token
                 
+                # If tokens are still missing, try to retrieve the current session from Supabase client
+                if (not access_token or not refresh_token):
+                    try:
+                        current_session = supabase.auth.get_session()
+                        if current_session:
+                            if not access_token:
+                                if hasattr(current_session, "access_token"):
+                                    access_token = current_session.access_token
+                                elif isinstance(current_session, dict):
+                                    access_token = current_session.get("access_token")
+                            if not refresh_token:
+                                if hasattr(current_session, "refresh_token"):
+                                    refresh_token = current_session.refresh_token
+                                elif isinstance(current_session, dict):
+                                    refresh_token = current_session.get("refresh_token")
+                    except Exception:
+                        pass
+                
+                # Fall back to session_state values if still missing
+                if not access_token:
+                    access_token = st.session_state.get("supabase_access_token")
+                if not refresh_token:
+                    refresh_token = st.session_state.get("supabase_refresh_token")
+                
                 # Explicitly set session on Supabase client to ensure it's active
                 if access_token and refresh_token:
                     try:
@@ -663,7 +954,10 @@ def show_login():
                 # This prevents race condition where validation runs before Supabase session is fully established
                 st.session_state["oauth_just_completed"] = True
                 
-                ensure_user_in_db(user)
+                db_user_id = ensure_user_in_db(user)
+                if db_user_id:
+                    st.session_state["credify_user_id"] = db_user_id
+                    store_supabase_session_tokens(db_user_id, access_token, refresh_token)
                 st.success(f"✅ Logged in as {user.email}")
                 
                 # Clear OAuth query params to prevent re-processing
@@ -716,7 +1010,14 @@ def show_login():
                             if user:
                                 st.session_state["user"] = user
                                 st.session_state["oauth_just_completed"] = True
-                                ensure_user_in_db(user)
+                                db_user_id = ensure_user_in_db(user)
+                                if db_user_id:
+                                    st.session_state["credify_user_id"] = db_user_id
+                                    store_supabase_session_tokens(
+                                        db_user_id,
+                                        st.session_state.get("supabase_access_token"),
+                                        st.session_state.get("supabase_refresh_token"),
+                                    )
                                 st.success(f"✅ Logged in as {user.email}")
                                 st.query_params.clear()
                                 st.rerun()
@@ -761,6 +1062,14 @@ def show_login():
                     st.info(f"Supabase URL: {SUPABASE_URL}")
                     st.info(f"Supabase Key present: {'Yes' if SUPABASE_KEY else 'No'}")
         return
+    elif is_instagram_oauth and "code" in query_params:
+        # Instagram redirects should land on the main app route.
+        # If we reach the login screen with an Instagram callback,
+        # the session was reset before the user was authenticated.
+        if instagram_oauth_error:
+            st.error(instagram_oauth_error)
+        else:
+            st.warning("Instagram callback detected without an active session. Please return to Settings → Connections and try connecting again.")
 
     # --- Google Sign-In Button --- (centered)
     # Generate OAuth URL on page load so we can use it with link_button for direct redirect
@@ -882,7 +1191,49 @@ def show_login():
                 )
                 if user and user.user:
                     st.session_state["user"] = user.user
-                    ensure_user_in_db(user.user)
+                    access_token = None
+                    refresh_token = None
+                    if hasattr(user, "session") and user.session:
+                        session_obj = user.session
+                        if hasattr(session_obj, "access_token"):
+                            access_token = session_obj.access_token
+                        elif isinstance(session_obj, dict):
+                            access_token = session_obj.get("access_token")
+                        if hasattr(session_obj, "refresh_token"):
+                            refresh_token = session_obj.refresh_token
+                        elif isinstance(session_obj, dict):
+                            refresh_token = session_obj.get("refresh_token")
+
+                    if not access_token or not refresh_token:
+                        try:
+                            current_session = supabase.auth.get_session()
+                            if current_session:
+                                if not access_token:
+                                    if hasattr(current_session, "access_token"):
+                                        access_token = current_session.access_token
+                                    elif isinstance(current_session, dict):
+                                        access_token = current_session.get("access_token")
+                                if not refresh_token:
+                                    if hasattr(current_session, "refresh_token"):
+                                        refresh_token = current_session.refresh_token
+                                    elif isinstance(current_session, dict):
+                                        refresh_token = current_session.get("refresh_token")
+                        except Exception:
+                            pass
+
+                    if access_token:
+                        st.session_state["supabase_access_token"] = access_token
+                    if refresh_token:
+                        st.session_state["supabase_refresh_token"] = refresh_token
+                    if not refresh_token:
+                        refresh_token = st.session_state.get("supabase_refresh_token")
+                    if not access_token:
+                        access_token = st.session_state.get("supabase_access_token")
+
+                    db_user_id = ensure_user_in_db(user.user)
+                    if db_user_id:
+                        st.session_state["credify_user_id"] = db_user_id
+                        store_supabase_session_tokens(db_user_id, access_token, refresh_token)
                     st.success(f"Welcome, {user.user.email}!")
                     st.rerun()
                 else:
