@@ -33,8 +33,10 @@ def get_instagram_oauth_url(
         scopes = [
             "instagram_basic",
             "instagram_manage_insights",
+            "instagram_manage_comments",
             "pages_read_engagement",  # For accessing Instagram Business accounts
-            "pages_show_list"  # To list connected pages
+            "pages_show_list",  # To list connected pages
+            "business_management",
         ]
     
     base_url = "https://www.facebook.com/v19.0/dialog/oauth"
@@ -193,7 +195,8 @@ def get_long_lived_token(
 
 def get_instagram_business_account_id(
     access_token: str,
-    page_id: Optional[str] = None
+    page_id: Optional[str] = None,
+    debug_callback: Optional[Callable[[str, object], None]] = None,
 ) -> Optional[Dict]:
     """Get Instagram Business Account ID and username from Facebook Page or user's pages.
     
@@ -205,16 +208,27 @@ def get_instagram_business_account_id(
         Dict with 'account_id' and 'username', or None if not found
     """
     try:
+        if debug_callback:
+            debug_callback(
+                "get_ig_account_request",
+                {
+                    "page_id": page_id,
+                    "endpoint": "page" if page_id else "me/accounts",
+                },
+            )
+
         if page_id:
             # Get Instagram account for specific page
-            url = f"https://graph.facebook.com/v18.0/{page_id}"
+            url = f"https://graph.facebook.com/v19.0/{page_id}"
             params = {
-                "fields": "instagram_business_account{id,username}",
+                "fields": "instagram_business_account{id,username,name}",
                 "access_token": access_token
             }
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
+            if debug_callback:
+                debug_callback("get_ig_account_response", data)
             
             if "instagram_business_account" in data:
                 ig_account = data["instagram_business_account"]
@@ -227,14 +241,16 @@ def get_instagram_business_account_id(
                 return {"account_id": str(ig_account), "username": None}
         else:
             # Get user's pages and find one with Instagram account
-            url = "https://graph.facebook.com/v18.0/me/accounts"
+            url = "https://graph.facebook.com/v19.0/me/accounts"
             params = {
-                "fields": "id,name,instagram_business_account{id,username}",
+                "fields": "id,name,instagram_business_account{id,username,name}",
                 "access_token": access_token
             }
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
+            if debug_callback:
+                debug_callback("get_ig_accounts_response", data)
             
             if "data" in data and len(data["data"]) > 0:
                 # Find first page with Instagram Business account
@@ -249,6 +265,8 @@ def get_instagram_business_account_id(
                         # If just ID string
                         return {"account_id": str(ig_account), "username": None}
     except requests.exceptions.RequestException as e:
+        if debug_callback:
+            debug_callback("get_ig_account_error", str(e))
         print(f"Error getting Instagram Business Account ID: {e}")
     
     return None

@@ -1,3 +1,4 @@
+
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
@@ -41,6 +42,133 @@ from auth import get_service_supabase_client
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
+
+
+def handle_instagram_oauth_callback(user_id: str, code: str):
+    """Handle Instagram OAuth callback and store tokens.
+    
+    Args:
+        user_id: User ID
+        code: OAuth authorization code
+    """
+    print(
+        "[Instagram OAuth] handler_start",
+        {
+            "user_id": user_id,
+            "code_present": bool(code),
+            "code_prefix": (code[:6] + "..." if code else None),
+        },
+    )
+
+    fb_app_id, fb_app_secret = get_facebook_app_credentials()
+    redirect_uri = get_instagram_redirect_url()
+    debug_instagram = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
+
+    def log_debug(label: str, payload):
+        print(f"[Instagram OAuth] {label}: {payload}")
+        if debug_instagram:
+            st.write(f"DEBUG - {label}:", payload)
+
+    log_debug("redirect_uri", redirect_uri)
+    
+    if not fb_app_id or not fb_app_secret:
+        st.error("Facebook App credentials not configured")
+        return
+    
+    with st.spinner("Connecting Instagram account..."):
+        try:
+            # Exchange code for short-lived token
+            token_data, token_error = exchange_code_for_token(
+                app_id=fb_app_id,
+                app_secret=fb_app_secret,
+                code=code,
+                redirect_uri=redirect_uri,
+                debug_callback=log_debug if debug_instagram else None,
+            )
+            log_debug(
+                "short_token_exchange",
+                {
+                    "error": token_error,
+                    "has_token": bool(token_data and token_data.get("access_token")),
+                },
+            )
+
+            if token_error:
+                st.error(f"Failed to get access token: {token_error}")
+                st.stop()
+            if not token_data or "access_token" not in token_data:
+                st.error("Failed to get access token: Missing access_token in response.")
+                st.stop()
+
+            short_token = token_data["access_token"]
+
+            log_debug("short_token", short_token[:6] + "..." if short_token else None)
+
+            # Exchange for long-lived token
+            long_token_data, long_token_error = get_long_lived_token(
+                short_lived_token=short_token,
+                app_id=fb_app_id,
+                app_secret=fb_app_secret,
+                debug_callback=log_debug if debug_instagram else None,
+            )
+            log_debug(
+                "long_token_exchange",
+                {
+                    "error": long_token_error,
+                    "has_token": bool(long_token_data and long_token_data.get("access_token")),
+                },
+            )
+
+            if long_token_error:
+                st.error(f"Failed to get long-lived token: {long_token_error}")
+                st.stop()
+            if not long_token_data or "access_token" not in long_token_data:
+                st.error("Failed to get long-lived token: Missing access_token in response.")
+                st.stop()
+
+            long_token = long_token_data["access_token"]
+            log_debug("long_token", long_token[:6] + "..." if long_token else None)
+            expires_in = long_token_data.get("expires_in", 5184000)
+            
+            # Get Instagram Business Account ID and username
+            account_info = get_instagram_business_account_id(
+                access_token=long_token,
+                debug_callback=log_debug,
+            )
+            log_debug("account_info", account_info)
+
+            if not account_info or not account_info.get("account_id"):
+                st.error("Could not find Instagram Business Account. Make sure your Facebook Page has an Instagram Business account connected.")
+                st.stop()
+            
+            account_id = account_info["account_id"]
+            account_username = account_info.get("username")
+            
+            # Store token
+            token_client = get_service_supabase_client()
+            log_debug("using_service_client", token_client is not None)
+            success = store_instagram_token(
+                supabase=token_client or supabase,
+                user_id=user_id,
+                access_token=long_token,
+                account_id=account_id,
+                expires_in=expires_in,
+                account_username=account_username
+            )
+            log_debug("store_token_success", success)
+            
+            if success:
+                st.success("✅ Instagram account connected successfully!")
+                # Clear OAuth query params
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error("Failed to store Instagram token")
+                st.stop()
+
+        except Exception as e:
+            st.error(f"Error connecting Instagram: {str(e)}")
+            st.stop()
 
 # -------------------------------
 # INITIAL SETUP
@@ -425,8 +553,16 @@ if is_instagram_oauth:
                 del st.session_state[restore_flag_key]
             # Clear stored code once we're about to use it
             code_from_state = st.session_state.pop("instagram_oauth_code", code)
+            print(
+                "[Instagram OAuth] about_to_call_handler",
+                {"code_from_state": code_from_state, "original_code": code},
+            )
             print("[Instagram OAuth] invoking_handler", {"current_u_id": current_u_id})
-            handle_instagram_oauth_callback(current_u_id, code_from_state)
+            try:
+                handle_instagram_oauth_callback(current_u_id, code_from_state)
+            except Exception as handler_error:
+                print("[Instagram OAuth] handler_failed", {"error": str(handler_error)})
+                raise
             # The callback handler will clear query params and rerun
             # If it doesn't rerun, we'll continue and the Settings page will also handle it
         else:
@@ -2689,125 +2825,6 @@ def show_analytics_page():
         peak_date = peak_row["date"].date()
         peak_value = int(peak_row[metric_col])
         st.caption(f"Peak day: **{peak_date}** with **{peak_value:,} {selected_metric.lower()}**")
-
-
-def handle_instagram_oauth_callback(user_id: str, code: str):
-    """Handle Instagram OAuth callback and store tokens.
-    
-    Args:
-        user_id: User ID
-        code: OAuth authorization code
-    """
-    print("[Instagram OAuth] handler_start", {"user_id": user_id, "code_present": bool(code), "code_prefix": (code[:6] + "..." if code else None)})
-
-    fb_app_id, fb_app_secret = get_facebook_app_credentials()
-    redirect_uri = get_instagram_redirect_url()
-    debug_instagram = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
-
-    def log_debug(label: str, payload):
-        print(f"[Instagram OAuth] {label}: {payload}")
-        if debug_instagram:
-            st.write(f"DEBUG - {label}:", payload)
-
-    log_debug("redirect_uri", redirect_uri)
-    
-    if not fb_app_id or not fb_app_secret:
-        st.error("Facebook App credentials not configured")
-        return
-    
-    with st.spinner("Connecting Instagram account..."):
-        try:
-            # Exchange code for short-lived token
-            token_data, token_error = exchange_code_for_token(
-                app_id=fb_app_id,
-                app_secret=fb_app_secret,
-                code=code,
-                redirect_uri=redirect_uri,
-                debug_callback=log_debug if debug_instagram else None,
-            )
-            log_debug(
-                "short_token_exchange",
-                {
-                    "error": token_error,
-                    "has_token": bool(token_data and token_data.get("access_token")),
-                },
-            )
-
-            if token_error:
-                st.error(f"Failed to get access token: {token_error}")
-                st.stop()
-            if not token_data or "access_token" not in token_data:
-                st.error("Failed to get access token: Missing access_token in response.")
-                st.stop()
-
-            short_token = token_data["access_token"]
-
-            log_debug("short_token", short_token[:6] + "..." if short_token else None)
-
-            # Exchange for long-lived token
-            long_token_data, long_token_error = get_long_lived_token(
-                short_lived_token=short_token,
-                app_id=fb_app_id,
-                app_secret=fb_app_secret,
-                debug_callback=log_debug if debug_instagram else None,
-            )
-            log_debug(
-                "long_token_exchange",
-                {
-                    "error": long_token_error,
-                    "has_token": bool(long_token_data and long_token_data.get("access_token")),
-                },
-            )
-
-            if long_token_error:
-                st.error(f"Failed to get long-lived token: {long_token_error}")
-                st.stop()
-            if not long_token_data or "access_token" not in long_token_data:
-                st.error("Failed to get long-lived token: Missing access_token in response.")
-                st.stop()
-
-            long_token = long_token_data["access_token"]
-            log_debug("long_token", long_token[:6] + "..." if long_token else None)
-            expires_in = long_token_data.get("expires_in", 5184000)
-            
-            # Get Instagram Business Account ID and username
-            account_info = get_instagram_business_account_id(
-                access_token=long_token
-            )
-            log_debug("account_info", account_info)
-
-            if not account_info or not account_info.get("account_id"):
-                st.error("Could not find Instagram Business Account. Make sure your Facebook Page has an Instagram Business account connected.")
-                st.stop()
-            
-            account_id = account_info["account_id"]
-            account_username = account_info.get("username")
-            
-            # Store token
-            token_client = get_service_supabase_client()
-            log_debug("using_service_client", token_client is not None)
-            success = store_instagram_token(
-                supabase=token_client or supabase,
-                user_id=user_id,
-                access_token=long_token,
-                account_id=account_id,
-                expires_in=expires_in,
-                account_username=account_username
-            )
-            log_debug("store_token_success", success)
-            
-            if success:
-                st.success("✅ Instagram account connected successfully!")
-                # Clear OAuth query params
-                st.query_params.clear()
-                st.rerun()
-            else:
-                st.error("Failed to store Instagram token")
-                st.stop()
-
-        except Exception as e:
-            st.error(f"Error connecting Instagram: {str(e)}")
-            st.stop()
 
 
 def show_settings_page():
