@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from html import escape
 import secrets
+from typing import Optional
+from types import SimpleNamespace
 from auth import (
     show_login,
     logout_button,
@@ -62,7 +64,7 @@ def handle_instagram_oauth_callback(user_id: str, code: str):
 
     fb_app_id, fb_app_secret = get_facebook_app_credentials()
     redirect_uri = get_instagram_redirect_url()
-    debug_instagram = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
+    debug_instagram = DEBUG_INSTAGRAM_OAUTH
 
     def log_debug(label: str, payload):
         print(f"[Instagram OAuth] {label}: {payload}")
@@ -356,6 +358,66 @@ if not YOUTUBE_API_KEY:
 
 # Use the same Supabase client instance as auth.py to maintain PKCE state
 supabase: Client = auth_supabase
+
+# Global debug flags
+DEBUG_INSTAGRAM_OAUTH = str(st.secrets.get("DEBUG_INSTAGRAM_OAUTH", "false")).lower() == "true"
+
+
+def set_page_override(page_name: Optional[str], *, persist: bool = False) -> None:
+    """Update the page override target with optional persistence across reruns."""
+    if page_name:
+        st.session_state["page_override"] = page_name
+        st.session_state["page_override_persist"] = persist
+    else:
+        st.session_state["page_override"] = None
+        st.session_state["page_override_persist"] = False
+
+
+def restore_user_from_supabase_session() -> None:
+    """Ensure the Supabase user is present in session_state before routing."""
+    if "user" in st.session_state:
+        return
+    
+    try:
+        user_response = supabase.auth.get_user()
+        restored_user = None
+        if user_response:
+            if hasattr(user_response, "user") and user_response.user:
+                restored_user = user_response.user
+            elif isinstance(user_response, dict) and user_response.get("user"):
+                restored_user = user_response.get("user")
+            else:
+                restored_user = user_response
+        
+        restored_email: Optional[str] = None
+        if restored_user:
+            if isinstance(restored_user, dict):
+                restored_email = restored_user.get("email")
+                restored_user = SimpleNamespace(**restored_user)
+            else:
+                restored_email = getattr(restored_user, "email", None)
+            if restored_email:
+                st.session_state["user"] = restored_user
+                st.session_state["user_email"] = restored_email
+            try:
+                current_session = supabase.auth.get_session()
+                if current_session:
+                    st.session_state["session"] = current_session
+            except Exception:
+                pass
+            if restored_email:
+                st.write("User restored:", restored_email)
+    except Exception as restore_error:
+        print("[Auth] restore_user_from_supabase_session_error", {"error": str(restore_error)})
+
+
+if "page_override" not in st.session_state:
+    st.session_state["page_override"] = None
+if "page_override_persist" not in st.session_state:
+    st.session_state["page_override_persist"] = False
+
+# Attempt to rehydrate user session early to survive reruns
+restore_user_from_supabase_session()
 
 # -------------------------------
 # AUTHENTICATION GATE
@@ -1284,7 +1346,7 @@ def fetch_instagram_daily_timeseries(u_id: str, start_date_iso: str, end_date_is
     # Fetch Instagram insights for this user and metric
     insights_resp = supabase.table("instagram_insights") \
         .select("value, end_time") \
-        .eq("user_id", u_id) \
+        .eq("u_id", u_id) \
         .eq("metric", metric_name) \
         .gte("end_time", start_date_iso) \
         .lte("end_time", end_date_iso) \
@@ -1495,19 +1557,19 @@ def show_profile():
         st.markdown(f"**YouTube**")
         if st.button("YouTube Overview", key="btn_youtube", use_container_width=True):
             st.session_state["selected_platform"] = "youtube"
-            st.session_state["page_override"] = "YouTube"
+            set_page_override("YouTube")
             st.rerun()
     with btn_cols[1]:
         st.markdown(f"**Instagram**")
         if st.button("Instagram Overview", key="btn_instagram", use_container_width=True):
             st.session_state["selected_platform"] = "instagram"
-            st.session_state["page_override"] = "Instagram"
+            set_page_override("Instagram")
             st.rerun()
     with btn_cols[2]:
         st.markdown(f"**TikTok**")
         if st.button("TikTok Overview", key="btn_tiktok", use_container_width=True):
             st.session_state["selected_platform"] = "tiktok"
-            st.session_state["page_override"] = "TikTok"
+            set_page_override("TikTok")
             st.rerun()
     
     st.divider()
@@ -1846,7 +1908,7 @@ def show_youtube_overview():
     back_cols = st.columns([1, 2, 1])
     with back_cols[0]:
         if st.button("← Back to Profile Overview", key="btn_back_profile_youtube"):
-            st.session_state["page_override"] = "Profile"
+            set_page_override("Profile")
             st.rerun()
 
     # Get user info
@@ -1967,7 +2029,7 @@ def show_youtube_overview():
         with act_cols[1]:
             if st.button("View Analytics", key="btn_view_yt_analytics", use_container_width=True):
                 st.session_state["selected_platform"] = "youtube"
-                st.session_state["page_override"] = "Analytics"
+                set_page_override("Analytics")
                 st.rerun()
 
     st.divider()
@@ -2067,7 +2129,7 @@ def _show_generic_platform_overview(platform_key: str, platform_label: str):
     back_cols = st.columns([1, 2, 1])
     with back_cols[0]:
         if st.button("← Back to Profile Overview", key=f"btn_back_profile_{platform_key}"):
-            st.session_state["page_override"] = "Profile"
+            set_page_override("Profile")
             st.rerun()
 
     user_res = supabase.table("users").select("*").eq("u_email", normalized_email).execute()
@@ -2142,7 +2204,7 @@ def _show_generic_platform_overview(platform_key: str, platform_label: str):
     with actions_col2:
         if st.button("View Analytics", key=f"btn_view_{platform_key}_analytics", use_container_width=True):
             st.session_state["selected_platform"] = platform_key
-            st.session_state["page_override"] = "Analytics"
+            set_page_override("Analytics")
             st.rerun()
 
     st.divider()
@@ -2155,11 +2217,46 @@ def _show_generic_platform_overview(platform_key: str, platform_label: str):
 def show_instagram_overview():
     st.session_state["selected_platform"] = "instagram"
 
+    def render_refresh_feedback(refresh_state, *, expand_logs: bool = False):
+        if not refresh_state:
+            return
+
+        result_state = (refresh_state or {}).get("result") or {}
+        debug_logs = (refresh_state or {}).get("debug_logs") or []
+
+        if result_state:
+            success = result_state.get("success", False)
+            total_inserted = result_state.get("total_inserted", 0)
+            total_errors = result_state.get("total_errors", 0)
+            errors = result_state.get("errors") or []
+
+            if success:
+                st.success(f"✅ Fetched and stored {total_inserted} Instagram metric records")
+            elif total_inserted > 0:
+                st.warning(f"⚠️ Inserted {total_inserted} records with {total_errors} errors")
+            else:
+                st.warning("No new metrics fetched. Data may already be up to date.")
+
+            if errors:
+                with st.expander("Instagram refresh errors", expanded=not success):
+                    for error in errors:
+                        st.error(error)
+
+        if debug_logs:
+            with st.expander("Instagram refresh debug logs", expanded=expand_logs):
+                for line in debug_logs:
+                    st.write(line)
+
+    pending_refresh_state = st.session_state.get("instagram_refresh_state")
+    if pending_refresh_state:
+        render_refresh_feedback(pending_refresh_state)
+        st.session_state["instagram_refresh_state"] = None
+
     # Back to Profile Overview
     back_cols = st.columns([1, 2, 1])
     with back_cols[0]:
         if st.button("← Back to Profile Overview", key="btn_back_profile_instagram"):
-            st.session_state["page_override"] = "Profile"
+            set_page_override("Profile")
             st.rerun()
 
     # Get user info
@@ -2265,6 +2362,9 @@ def show_instagram_overview():
         act_cols = st.columns(2)
         with act_cols[0]:
             if st.button("🔄 Refresh Insights", key="ig_refresh_btn", use_container_width=True):
+                st.session_state["selected_platform"] = "instagram"
+                set_page_override("Instagram", persist=True)
+                st.write("STARTING INSIGHTS REFRESH")
                 with st.spinner("Fetching latest Instagram insights..."):
                     try:
                         # Get user's Instagram account (multi-user)
@@ -2283,32 +2383,48 @@ def show_instagram_overview():
                             st.warning("Your Instagram token has expired. Please reconnect in Settings → Connections.")
                             return
                         
+                        debug_messages: list[str] = []
+
+                        def add_debug(message: str) -> None:
+                            timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                            debug_messages.append(f"[{timestamp}] {message}")
+
                         result: FetchResult = fetch_and_store_instagram_insights(
                             supabase=supabase,
                             access_token=access_token,
                             instagram_account_id=account_id,
-                            user_id=u_id
+                            user_id=u_id,
+                            debug_log=add_debug
                         )
                         
+                        refresh_state = {
+                            "result": {
+                                "success": result.success,
+                                "total_inserted": result.total_inserted,
+                                "total_errors": result.total_errors,
+                                "errors": result.errors,
+                            },
+                            "debug_logs": debug_messages,
+                        }
+                        
+                        st.session_state["instagram_refresh_state"] = refresh_state
+
                         if result.success:
-                            st.success(f"✅ Fetched and stored {result.total_inserted} metric records")
+                            st.session_state["selected_platform"] = "instagram"
+                            set_page_override("Instagram", persist=True)
                             st.rerun()
                         elif result.total_inserted > 0:
-                            st.warning(f"⚠️ Inserted {result.total_inserted} records with {result.total_errors} errors")
-                            if result.errors:
-                                with st.expander("View errors"):
-                                    for error in result.errors:
-                                        st.error(error)
+                            render_refresh_feedback(refresh_state, expand_logs=True)
+                            st.session_state["instagram_refresh_state"] = None
                         else:
-                            st.warning("No new metrics fetched. Data may already be up to date.")
-                            if result.errors:
-                                st.error(f"Errors: {', '.join(result.errors)}")
+                            render_refresh_feedback(refresh_state, expand_logs=True)
+                            st.session_state["instagram_refresh_state"] = None
                     except Exception as e:
                         st.error(f"Error fetching Instagram insights: {str(e)}")
         with act_cols[1]:
             if st.button("View Analytics", key="btn_view_ig_analytics", use_container_width=True):
                 st.session_state["selected_platform"] = "instagram"
-                st.session_state["page_override"] = "Analytics"
+                set_page_override("Analytics")
                 st.rerun()
 
     st.divider()
@@ -2318,7 +2434,7 @@ def show_instagram_overview():
     try:
         insights_res = supabase.table("instagram_insights") \
             .select("metric, value, end_time") \
-            .eq("user_id", u_id) \
+            .eq("u_id", u_id) \
             .order("end_time", desc=True) \
             .limit(20) \
             .execute()
@@ -3226,7 +3342,13 @@ def show_topbar():
 # -------------------------------
 with st.sidebar:
     st.markdown("<div class='sb-brand'>Credify</div>", unsafe_allow_html=True)
-    page = st.radio("Navigate to:", ["Home", "Profile", "Analytics", "Notifications", "Settings"], index=1)
+    sidebar_pages = ["Home", "Profile", "Analytics", "Notifications", "Settings"]
+    if "sidebar_page_selection" not in st.session_state:
+        st.session_state["sidebar_page_selection"] = "Profile"
+    previous_sidebar_selection = st.session_state.get("sidebar_page_selection")
+    selected_nav_page = st.radio("Navigate to:", sidebar_pages, key="sidebar_page_selection")
+    nav_selection_changed = selected_nav_page != previous_sidebar_selection
+    page = selected_nav_page
     st.divider()
     logout_button()
 
@@ -3239,9 +3361,18 @@ show_topbar()
 # PAGE ROUTING
 # -------------------------------
 override = st.session_state.get("page_override")
+override_persist = st.session_state.get("page_override_persist", False)
+
 if override:
     page = override
-    st.session_state["page_override"] = None
+    if override_persist and nav_selection_changed and selected_nav_page != override:
+        # User changed sidebar selection to a different page; respect it on next rerun.
+        set_page_override(selected_nav_page, persist=False)
+        page = selected_nav_page
+        override_persist = False
+        override = st.session_state.get("page_override")
+    if override and not override_persist:
+        set_page_override(None)
 
 if page == "Home":
     show_home_page()

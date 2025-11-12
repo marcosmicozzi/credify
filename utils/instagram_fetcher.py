@@ -4,10 +4,15 @@ This module handles mixed metric types (time_series vs total_value) by fetching
 them in separate requests, normalizes timestamps, and provides reliable insert verification.
 """
 import requests
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from supabase import Client
 from dataclasses import dataclass
+
+try:
+    import streamlit as st  # type: ignore
+except ImportError:  # pragma: no cover
+    st = None  # type: ignore
 
 
 # Metric configuration: maps metric name to its type
@@ -206,7 +211,8 @@ def fetch_and_store_instagram_insights(
     access_token: str,
     instagram_account_id: str,
     user_id: Optional[str] = None,
-    metrics: Optional[List[str]] = None
+    metrics: Optional[List[str]] = None,
+    debug_log: Optional[Callable[[str], None]] = None
 ) -> FetchResult:
     """Fetch Instagram metrics and store them in Supabase.
     
@@ -219,91 +225,143 @@ def fetch_and_store_instagram_insights(
         instagram_account_id: Instagram Business Account ID
         user_id: User ID to associate with metrics
         metrics: Optional list of metrics to fetch (defaults to all 4)
+        debug_log: Optional callback for debug logging
         
     Returns:
         FetchResult with success status, counts, and error details
     """
-    if metrics is None:
-        metrics = list(METRIC_CONFIG.keys())
+    metrics_list = metrics or list(METRIC_CONFIG.keys())
+    
+    if debug_log:
+        debug_log("Starting Instagram insights fetch")
+        debug_log(f"Account ID: {instagram_account_id}")
+        if user_id:
+            debug_log(f"User ID: {user_id}")
+        debug_log(f"Metrics requested: {metrics_list}")
     
     retrieved_at = datetime.now(timezone.utc).isoformat()
-    all_records = []
-    errors = []
-    metrics_inserted = {metric: 0 for metric in metrics}
     
-    # Fetch each metric separately by type
-    for metric in metrics:
-        metric_type = METRIC_CONFIG.get(metric, "time_series")
+    try:
+        all_records: List[Dict] = []
+        errors: List[str] = []
+        metrics_inserted = {metric: 0 for metric in metrics_list}
         
-        # Fetch metric
-        api_response = fetch_instagram_insights_single(
-            access_token=access_token,
-            instagram_account_id=instagram_account_id,
-            metric=metric,
-            metric_type=metric_type,
-            period="day"
-        )
+        # Fetch each metric separately by type
+        for metric in metrics_list:
+            metric_type = METRIC_CONFIG.get(metric, "time_series")
+            
+            if debug_log:
+                debug_log(f"Fetching metric '{metric}' ({metric_type})")
+            
+            api_response = fetch_instagram_insights_single(
+                access_token=access_token,
+                instagram_account_id=instagram_account_id,
+                metric=metric,
+                metric_type=metric_type,
+                period="day"
+            )
+            
+            if not api_response:
+                errors.append(f"Failed to fetch {metric} ({metric_type})")
+                if debug_log:
+                    debug_log(f"Failed to fetch '{metric}' ({metric_type})")
+                continue
+            
+            records = parse_metric_response(metric, api_response, retrieved_at)
+            
+            if not records:
+                errors.append(f"No data returned for {metric}")
+                if debug_log:
+                    debug_log(f"No data returned for metric '{metric}'")
+                continue
+            
+            for record in records:
+                if user_id:
+                    record["u_id"] = user_id
+                record["account_id"] = instagram_account_id
+            
+            all_records.extend(records)
+            if debug_log:
+                debug_log(f"Prepared {len(records)} record(s) for metric '{metric}'")
         
-        if not api_response:
-            errors.append(f"Failed to fetch {metric} ({metric_type})")
-            continue
+        total_inserted = 0
+        total_errors = len(errors)
         
-        # Parse response
-        records = parse_metric_response(metric, api_response, retrieved_at)
-        
-        if not records:
-            errors.append(f"No data returned for {metric}")
-            continue
-        
-        # Add user_id and account_id to each record
-        for record in records:
-            if user_id:
-                record["u_id"] = user_id
-            record["account_id"] = instagram_account_id
-        
-        all_records.extend(records)
-    
-    # Batch insert all records
-    total_inserted = 0
-    total_errors = len(errors)
-    
-    if all_records:
-        try:
-            # Insert in batches to avoid overwhelming the database
-            batch_size = 50
-            for i in range(0, len(all_records), batch_size):
-                batch = all_records[i:i + batch_size]
-                result = supabase.table("instagram_insights").insert(batch).execute()
-                
-                success, inserted_count = verify_insert_success(result)
-                
-                if success:
-                    # Count by metric
-                    for record in batch:
-                        metric_name = record.get("metric")
-                        if metric_name in metrics_inserted:
-                            metrics_inserted[metric_name] += 1
-                    total_inserted += inserted_count if inserted_count > 0 else len(batch)
-                else:
-                    error_msg = f"Insert failed for batch starting at index {i}"
-                    if hasattr(result, 'error') and result.error:
-                        error_msg += f": {result.error}"
-                    errors.append(error_msg)
-                    total_errors += 1
+        if all_records:
+            try:
+                batch_size = 50
+                for i in range(0, len(all_records), batch_size):
+                    batch = all_records[i:i + batch_size]
+                    if debug_log:
+                        debug_log(f"Inserting batch {i // batch_size + 1} with {len(batch)} record(s)")
+                    result = supabase.table("instagram_insights").insert(batch).execute()
                     
-        except Exception as e:
-            errors.append(f"Database insert exception: {str(e)}")
-            total_errors += 1
-    
-    return FetchResult(
-        success=total_inserted > 0 and total_errors == 0,
-        total_inserted=total_inserted,
-        total_errors=total_errors,
-        metrics_inserted=metrics_inserted,
-        errors=errors,
-        account_id=instagram_account_id,
-        user_id=user_id
-    )
+                    success, inserted_count = verify_insert_success(result)
+                    
+                    if success:
+                        for record in batch:
+                            metric_name = record.get("metric")
+                            if metric_name in metrics_inserted:
+                                metrics_inserted[metric_name] += 1
+                        total_inserted += inserted_count if inserted_count > 0 else len(batch)
+                        if debug_log:
+                            debug_log(f"Batch {i // batch_size + 1} insert succeeded (count={inserted_count or len(batch)})")
+                    else:
+                        error_msg = f"Insert failed for batch starting at index {i}"
+                        if hasattr(result, 'error') and result.error:
+                            error_msg += f": {result.error}"
+                        if debug_log:
+                            debug_log(f"Batch {i // batch_size + 1} insert failed: {error_msg}")
+                        errors.append(error_msg)
+                        total_errors += 1
+                        
+            except Exception as insert_error:
+                errors.append(f"Database insert exception: {str(insert_error)}")
+                total_errors += 1
+                if debug_log:
+                    debug_log(f"Database insert exception: {insert_error}")
+        else:
+            if debug_log:
+                debug_log("No records prepared for insertion")
+        
+        if debug_log:
+            debug_log(f"Insert summary: inserted={total_inserted}, errors={total_errors}")
+            if errors:
+                debug_log(f"Errors: {errors}")
+        
+        return FetchResult(
+            success=total_inserted > 0 and total_errors == 0,
+            total_inserted=total_inserted,
+            total_errors=total_errors,
+            metrics_inserted=metrics_inserted,
+            errors=errors,
+            account_id=instagram_account_id,
+            user_id=user_id
+        )
+    except Exception as e:
+        error_msg = f"Insights error: {e}"
+        if debug_log:
+            debug_log(error_msg)
+        if st:
+            try:
+                st.exception(e)
+            except Exception:  # pragma: no cover
+                try:
+                    st.error(error_msg)  # type: ignore
+                except Exception:
+                    print(error_msg)
+        else:
+            print(error_msg)
+        metrics_inserted = {metric: 0 for metric in metrics_list}
+        return FetchResult(
+            success=False,
+            total_inserted=0,
+            total_errors=1,
+            metrics_inserted=metrics_inserted,
+            errors=[error_msg],
+            account_id=instagram_account_id,
+            user_id=user_id
+        )
 
 
 def get_user_instagram_account(
